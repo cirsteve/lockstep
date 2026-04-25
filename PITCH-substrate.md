@@ -30,4 +30,4 @@ Trading is the wedge because it has high value, clear metrics, and existing supp
 
 We don't certify alpha, model quality, solution optimality, or forecast accuracy. We make cheating the test harder than finding real signal. That's the smaller, defensible claim. It's also the only claim that compounds.
 
-Built on jig.
+*Built with jig — multi-agent development framework. See README.*

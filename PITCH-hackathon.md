@@ -42,4 +42,4 @@ Each new domain is a Layer 3 instantiation on top of the same substrate. We ship
 
 We chose trading because it has high value, clear metrics, existing supply of underutilized quant talent, and clean composability with KeeperHub's existing sealed-executor infrastructure. Every sponsor's technology in this submission does work the others can't, and the substrate cannot exist without all three: 0G's chain, storage, and compute for attested grading and rentable assets; KeeperHub's workflows for sealed execution and reliable settlement; Gensyn's AXL for the permissionless validator transport.
 
-Built on jig.
+*Built with jig — multi-agent development framework. See README.*
