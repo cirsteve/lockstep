@@ -37,7 +37,9 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -46,12 +48,22 @@ from lockstep.domains.trading.market_neutral.dataset import (
     FUNDING_THRESHOLD,
     VALID_REGIMES,
     classify_funding_regime,
+    commitment_roots,
 )
+from lockstep.evaluation.solution import DatasetCommitment
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_FUNDING_DIR = REPO_ROOT / "data" / "raw" / "hyperliquid" / "funding_rates"
 RAW_SPOT_DIR = REPO_ROOT / "data" / "raw" / "binance" / "candles_spot"
 RAW_PERP_DIR = REPO_ROOT / "data" / "raw" / "hyperliquid" / "candles_perp"
+OUT_JSON = (
+    REPO_ROOT
+    / "lockstep"
+    / "domains"
+    / "trading"
+    / "market_neutral"
+    / "canonical_dataset.json"
+)
 
 ASSETS: tuple[str, ...] = ("AVAX",)
 HOURLY_STEP_MS = 3_600_000
@@ -210,6 +222,33 @@ def _check_regime_balance(dist: dict[str, float]) -> list[str]:
     ]
 
 
+def _to_bar_dicts(df: pd.DataFrame) -> list[dict]:
+    """Convert dataframe rows to the bar-dict shape MarketNeutralDataset expects.
+
+    Schema per ``lockstep.domains.trading.market_neutral.dataset``
+    docstring (timestamp/funding_rate/spot_close/perp_close/basis/
+    regime), plus ``coin`` (matches the directional dataset's ``asset``
+    pattern for multi-asset extension) and ``basis_bps`` (already
+    derived; cheap to keep). Timestamps are converted from parquet's
+    epoch-ms to epoch-seconds, matching the directional builder.
+    """
+    bars: list[dict] = []
+    for row in df.itertuples(index=False):
+        bars.append(
+            {
+                "timestamp": int(row.timestamp // 1000),
+                "coin": str(row.coin),
+                "funding_rate": float(row.funding_rate),
+                "spot_close": float(row.spot_close),
+                "perp_close": float(row.perp_close),
+                "basis": float(row.basis),
+                "basis_bps": float(row.basis_bps),
+                "regime": str(row.regime),
+            }
+        )
+    return bars
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -291,9 +330,59 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"WARN: {msg}")
 
-    # Steps 5 (split + commitment + persist) and 6 (report) land in
-    # subsequent commits.
-    print("\n[skeleton] split / persist not yet implemented (steps 5-6).")
+    # Sort bars deterministically: (timestamp, coin) — same convention
+    # as the directional builder. With single-coin AVAX this collapses
+    # to a chronological sort, but the rule generalizes if we add coins.
+    all_bars = _to_bar_dicts(
+        all_bars.sort_values(["timestamp", "coin"]).reset_index(drop=True)
+    )
+
+    # 80/20 chronological split: last 20% of unique timestamps go to
+    # the private holdout. Strict less-than at the split boundary so
+    # private starts strictly in the future of public — no leakage.
+    unique_ts = sorted({b["timestamp"] for b in all_bars})
+    split_ts = unique_ts[int(len(unique_ts) * 0.80)]
+    public_bars = [b for b in all_bars if b["timestamp"] < split_ts]
+    private_bars = [b for b in all_bars if b["timestamp"] >= split_ts]
+
+    print(
+        f"split @ ts={split_ts} ({datetime.fromtimestamp(split_ts, tz=UTC).isoformat()})  "
+        f"public={len(public_bars)} private={len(private_bars)}"
+    )
+
+    pub_root, priv_root, merkle_root = commitment_roots(
+        tuple(public_bars), tuple(private_bars)
+    )
+    storage_uri = f"mock://dataset/trading_market_neutral/{merkle_root[:18]}"
+    commitment = DatasetCommitment(
+        domain="trading_market_neutral",
+        merkle_root=merkle_root,
+        public_root=pub_root,
+        private_root=priv_root,
+        storage_uri=storage_uri,
+        schema_version="v1",
+    )
+
+    walk_forward_windows = ((len(public_bars) // 2, len(public_bars)),)
+    payload = {
+        "commitment": commitment.model_dump(),
+        "public_bars": public_bars,
+        "private_bars": private_bars,
+        "walk_forward_windows": list(walk_forward_windows),
+    }
+    OUT_JSON.parent.mkdir(parents=True, exist_ok=True)
+    OUT_JSON.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    print(
+        f"\nwrote canonical dataset → {OUT_JSON.relative_to(REPO_ROOT)} "
+        f"({OUT_JSON.stat().st_size // 1024} KB)"
+    )
+    print(f"merkle_root  = {merkle_root}")
+    print(f"public_root  = {pub_root}")
+    print(f"private_root = {priv_root}")
+    print(f"storage_uri  = {storage_uri}")
+
+    # Step 6 (methodology report under reports/day-04/) lands in the
+    # next commit.
     return 0
 
 
