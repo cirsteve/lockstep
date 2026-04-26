@@ -134,8 +134,10 @@ a class of bugs.
 
 ## Security
 
-The service binds to `127.0.0.1` only. **Never** expose it beyond
-localhost — the security model below relies on this.
+The service binds to `127.0.0.1` by default (override via the
+`LOCKSTEP_0G_STORAGE_BIND_HOST` env var; see "Containerized" below for
+the only intended override). **Never** expose it beyond localhost —
+the security model below relies on this.
 
 ### Trust boundary
 
@@ -167,8 +169,8 @@ which on a single-user dev box is the local user.
       service is a localhost-only dev tool, not a network service.
 - [ ] No `docker run -p 0.0.0.0:7878:7878` (or the implicit `-p
       7878:7878` form, which binds to `0.0.0.0` by default). If
-      containerizing, use `-p 127.0.0.1:7878:7878` explicitly, or run
-      with `--network host` and let the in-process bind enforce.
+      containerizing, use `-p 127.0.0.1:7878:7878` explicitly — see
+      "Containerized" below for why this is critical.
 - [ ] Faucet wallet has minimum-viable `0G` balance — a couple `0G` is
       plenty (~1.16 m`0G` per upload at the 2026-04-26 baseline). No
       reason to keep larger balances on the service's wallet, even
@@ -190,3 +192,32 @@ which on a single-user dev box is the local user.
 - The service does not persist state to disk. Restart loses the
   `datasetMap` and `authorizedAttestations` (per §A.0; see "State"
   above).
+
+### Containerized
+
+The Dockerfile sets `LOCKSTEP_0G_STORAGE_BIND_HOST=0.0.0.0` because
+Docker's default port mapping forwards from the host to the
+container's `eth0` interface, not its loopback. Binding `127.0.0.1`
+inside the container would make the service unreachable from the host.
+
+This means the *host-side* port mapping is what enforces localhost-only
+access. **Always** run the container with
+`-p 127.0.0.1:7878:7878` — the Docker default `-p 7878:7878` is
+shorthand for `-p 0.0.0.0:7878:7878` and exposes the wallet to anyone
+who can reach the host's network interfaces.
+
+Recommended invocation:
+
+```bash
+docker build -t lockstep-storage-ts services/storage-ts
+docker run --rm \
+  -p 127.0.0.1:7878:7878 \
+  --env-file .env \
+  lockstep-storage-ts
+```
+
+To preserve the in-process `127.0.0.1` bind instead, use
+`--network host` (Linux only) and unset
+`LOCKSTEP_0G_STORAGE_BIND_HOST` so the default applies. The trade-off:
+host-network containers see all the host's interfaces, which can be
+surprising — port mapping is the more portable safety net.

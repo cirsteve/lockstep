@@ -23,6 +23,12 @@ const INDEXER_URL =
   process.env.LOCKSTEP_0G_GALILEO_INDEXER ??
   'https://indexer-storage-testnet-turbo.0g.ai';
 const PORT = Number(process.env.LOCKSTEP_0G_STORAGE_PORT ?? '7878');
+// Default bind: 127.0.0.1 (host-only). Containerized deployments
+// override to 0.0.0.0 so Docker port mapping reaches the listener;
+// the operator is then responsible for using `-p 127.0.0.1:7878:7878`
+// (NOT bare `-p 7878:7878`, which exposes the wallet) — see README.md.
+const BIND_HOST =
+  process.env.LOCKSTEP_0G_STORAGE_BIND_HOST ?? '127.0.0.1';
 
 const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
@@ -537,8 +543,8 @@ app.post(
   },
 );
 
-app.listen(PORT, '127.0.0.1', () => {
+app.listen(PORT, BIND_HOST, () => {
   console.log(
-    `storage-ts: listening on 127.0.0.1:${PORT} (wallet ${wallet.address})`,
+    `storage-ts: listening on ${BIND_HOST}:${PORT} (wallet ${wallet.address})`,
   );
 });

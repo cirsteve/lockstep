@@ -135,7 +135,13 @@ def _real_adapter_or_skip(tmp_path: Path) -> RealStorageAdapter:
             f"TS storage service /healthz returned {resp.status_code} "
             f"(expected 200): {resp.text[:200]}"
         )
-    health = resp.json()
+    try:
+        health = resp.json()
+    except ValueError as exc:
+        pytest.skip(
+            f"TS storage service /healthz returned non-JSON body "
+            f"({exc}): {resp.text[:200]}"
+        )
     if not health.get("indexer_reachable", False):
         pytest.skip(
             f"TS storage service can't reach the 0G indexer at "

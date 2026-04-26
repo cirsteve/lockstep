@@ -30,6 +30,7 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.3",
     "mypy>=1.8",
+    "respx>=0.23.1",
 ]
 # Used only by `scripts/datasets/build_*.py`. Heavy (~150 MB once
 # numpy + pandas + pyarrow land); not needed by the lockstep package
@@ -72,8 +73,3 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["web3.*", "eth_account.*"]
 ignore_missing_imports = true
-
-[dependency-groups]
-dev = [
-    "respx>=0.23.1",
-]
