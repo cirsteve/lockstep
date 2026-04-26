@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-25
 **Spec:** `spec/smoketests_0G_storage_canonical_data.md` (gitignored — local working doc)
-**PRs opened:** [#2 storage-real](https://github.com/cirsteve/lockstep/pull/2), [#3 datasets](https://github.com/cirsteve/lockstep/pull/3), [#4 status (this)](https://github.com/cirsteve/lockstep/pull/4)
+**PRs opened:** #2 (storage-real, merged), #3 (datasets, merged), #4 (status, this PR)
 
 This doc is the input to the Day 4 spec drafter. Concrete and recommendation-oriented; no hand-waving.
 
@@ -103,8 +103,14 @@ For the Day 4 spec drafter (architecture-Claude or human), here are the concrete
    - Run the conformance suite with `LOCKSTEP_TEST_REAL_STORAGE=1` against the live Galileo testnet; all 6 tests pass before merging.
 
 2. **§4-B — Galileo wallet credentials provisioning.**
-   - Generate dev wallet (instructions in this PR's review thread already), claim 0.1+ testnet `0G` from `faucet.0g.ai`, set `LOCKSTEP_0G_PRIVATE_KEY` in shell + GitHub Actions secrets if CI should exercise the real path.
-   - Verify chain ID 16602 RPC (`https://evmrpc-testnet.0g.ai`) and indexer URL are still current; update `config/galileo.yaml` defaults if not.
+   - Generate a fresh dev wallet (don't reuse one that holds anything real):
+     ```bash
+     uv run python -c "from eth_account import Account; a = Account.create(); print('addr:', a.address); print('key:', a.key.hex())"
+     ```
+     Save both `addr` and `key`.
+   - Claim 0.1+ testnet `0G` from [faucet.0g.ai](https://faucet.0g.ai) by pasting the wallet address. Daily limit is 0.1 `0G`; their Discord has higher-allocation requests if needed.
+   - Set `LOCKSTEP_0G_PRIVATE_KEY=<key from step 1>` in your shell. Also add it to GitHub Actions secrets if CI should exercise the real path on `main` merges (not strictly required — the env-var gate keeps the conformance suite skipped by default).
+   - Verify chain ID 16602 RPC (`https://evmrpc-testnet.0g.ai`) and indexer URL are still current per [docs.0g.ai/developer-hub/testnet/testnet-overview](https://docs.0g.ai/developer-hub/testnet/testnet-overview); update `config/galileo.yaml` defaults if not.
 
 3. **§4-C — §3.2 market-neutral dataset.**
    - Same shape as §3.1 builder. Inputs: `data/raw/hyperliquid/funding_rates/{BTC,ETH}.parquet` and `data/raw/binance/candles_spot/{BTC,ETH}_1h.parquet` (already pulled into `data/raw/`).
@@ -142,8 +148,8 @@ For the Day 4 spec drafter (architecture-Claude or human), here are the concrete
 
 Before drafting Day 4 spec sections, confirm these are still true:
 
-- [ ] PRs #2 and #3 merged to main (or list the carryover from any remaining ones).
-- [ ] `uv run pytest -q` on main shows 118 passed, 6 skipped.
+- [x] PRs #2 and #3 merged to main.
+- [ ] `uv run pytest -q` on main shows 122 passed, 6 skipped.
 - [ ] `uv run python examples/demo_flow.py` runs end-to-end against Mock.
 - [ ] `data/raw/binance/candles_spot/{BTC,ETH,SOL}_1h.parquet` and `data/raw/hyperliquid/funding_rates/{BTC,ETH}.parquet` are present locally (re-pull via `scripts/datasets/README.md` if not).
 - [ ] Galileo (chain 16602) is still the recommended testnet per `docs.0g.ai`.
