@@ -193,7 +193,7 @@ def _strategy_source(path: pathlib.Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _load_config(path: pathlib.Path) -> dict[str, Any]:
-    with path.open() as fh:
+    with path.open(encoding="utf-8") as fh:
         loaded = yaml.safe_load(fh) or {}
     if not isinstance(loaded, dict):
         raise ValueError(f"config at {path} must be a YAML mapping at the top level")

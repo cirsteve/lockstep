@@ -111,7 +111,7 @@ def _log_event(log_path: Path, event: dict[str, Any]) -> None:
     """
     log_path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(event, sort_keys=True, separators=(",", ":"))
-    with log_path.open("a") as fh:
+    with log_path.open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
         fh.flush()
         os.fsync(fh.fileno())

@@ -34,9 +34,14 @@ class StorageError(SubstrateError):
     """Raised when a storage operation fails for non-trust reasons.
 
     Use for transient or operational failures: missing object, network
-    issue, auth failure. Trust failures (bytes/commitment mismatch,
-    signature invalid, unauthorized pubkey) raise ``TrustViolation``
-    instead — never retry those.
+    error, missing/invalid service credentials (e.g. the storage
+    backend rejects our API key). These are retry-able.
+
+    Trust failures — where the bytes the backend returns disagree with
+    a commitment, a receipt's signature doesn't verify, or a caller's
+    attestation pubkey isn't in the authorized set for sealed data —
+    raise ``TrustViolation`` instead. Those are byzantine evidence, not
+    transient: never retry them.
     """
 
 
