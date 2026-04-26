@@ -16,12 +16,13 @@ import hashlib
 import time
 from typing import Protocol
 
+from lockstep.errors import SubstrateError
 from lockstep.evaluation.canonical import Address, Bytes32Hex
 from lockstep.evaluation.evaluator import Evaluator
 from lockstep.evaluation.receipt import Receipt
 
 
-class ChainError(RuntimeError):
+class ChainError(SubstrateError):
     """Raised when an on-chain operation references something that doesn't exist."""
 
 

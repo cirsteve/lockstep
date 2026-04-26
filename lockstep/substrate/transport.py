@@ -12,6 +12,8 @@ import secrets
 from collections.abc import Callable
 from typing import Protocol
 
+from lockstep.errors import SubstrateError
+
 Handler = Callable[[str, bytes], None]
 
 
@@ -23,7 +25,7 @@ class TransportAdapter(Protocol):
     def peer_id(self) -> str: ...
 
 
-class TransportError(RuntimeError):
+class TransportError(SubstrateError):
     """Raised when transport setup fails (e.g. duplicate peer_id)."""
 
 

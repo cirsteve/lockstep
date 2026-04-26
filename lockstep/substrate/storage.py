@@ -24,12 +24,13 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from lockstep.errors import SubstrateError
 from lockstep.evaluation.canonical import Bytes32Hex
 from lockstep.evaluation.receipt import Receipt
 from lockstep.evaluation.solution import DatasetCommitment, EncryptedSolution
 
 
-class StorageError(RuntimeError):
+class StorageError(SubstrateError):
     """Raised when a storage operation fails (integrity, authorization, missing)."""
 
 

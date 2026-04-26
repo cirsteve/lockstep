@@ -39,10 +39,11 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
+from lockstep.errors import SubstrateError
 from lockstep.evaluation.canonical import Bytes32Hex
 
 
-class EncryptionError(RuntimeError):
+class EncryptionError(SubstrateError):
     """Raised when decryption fails or a key shape is wrong."""
 
 
