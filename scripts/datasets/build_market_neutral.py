@@ -41,6 +41,8 @@ RAW_PERP_DIR = REPO_ROOT / "data" / "raw" / "hyperliquid" / "candles_perp"
 
 ASSETS = ("BTC", "ETH")
 HOURLY_STEP_MS = 3_600_000
+EIGHT_HOUR_MS = 8 * HOURLY_STEP_MS
+HOURS_PER_WINDOW = 8
 
 
 def _load_one_coin(
@@ -112,6 +114,52 @@ def _load_one_coin(
     return joined, gaps
 
 
+def _add_basis_and_resample_funding(df: pd.DataFrame) -> pd.DataFrame:
+    """Derive basis + resample hourly funding to 8h sums (per §B.1).
+
+    Adds three columns and drops rows in incomplete 8h windows:
+
+    - ``basis`` = ``perp_close - spot_close`` (USD).
+    - ``basis_bps`` = ``basis / spot_close * 10000`` (basis points).
+    - ``funding_rate`` is REPLACED with the 8h-window sum (not the
+      hourly value). Hyperliquid charges funding hourly; the regime
+      threshold of ``|rate| > 0.0001`` is canonically per-8h, so we
+      sum within each 8h window aligned on UTC 00:00/08:00/16:00.
+      Sum, not mean — funding accrues, doesn't average.
+
+    Bars in incomplete 8h windows (typically the leading and trailing
+    partial windows of the source range) are dropped so every
+    surviving bar's ``funding_rate`` is a proper 8-hour sum. Windows
+    are aligned via integer-divide on the UTC epoch, so they sit on
+    00:00/08:00/16:00 boundaries regardless of where the data starts.
+    """
+    out = df.copy()
+    # Window-aligned 8h boundary that this hourly bar belongs to.
+    out["window_8h"] = (out["timestamp"] // EIGHT_HOUR_MS) * EIGHT_HOUR_MS
+
+    # Per-window aggregate: sum of hourly funding rates + how many
+    # hourly samples we have. Keep only windows with all 8 hours so
+    # the sum reflects a full 8-hour window.
+    grouped = out.groupby(["coin", "window_8h"], as_index=False).agg(
+        funding_rate_8h=("funding_rate", "sum"),
+        hours_in_window=("funding_rate", "count"),
+    )
+    complete = grouped[grouped["hours_in_window"] == HOURS_PER_WINDOW]
+
+    # Inner-merge the 8h sum back onto the hourly rows; rows in
+    # incomplete windows fall away.
+    out = out.merge(
+        complete[["coin", "window_8h", "funding_rate_8h"]],
+        on=["coin", "window_8h"],
+        how="inner",
+    )
+
+    out["basis"] = out["perp_close"] - out["spot_close"]
+    out["basis_bps"] = out["basis"] / out["spot_close"] * 10_000
+    out["funding_rate"] = out["funding_rate_8h"]
+    return out.drop(columns=["window_8h", "funding_rate_8h"]).reset_index(drop=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -138,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
         }
 
         joined, gaps = _load_one_coin(coin, strict=args.strict)
-        per_coin[coin] = joined
         if any(gaps.values()):
             print(f"WARN: {coin} non-hourly gaps: {gaps}")
         smallest_source = min(per_coin_raw_counts[coin].values())
@@ -151,13 +198,25 @@ def main(argv: list[str] | None = None) -> int:
             f"gaps funding={gaps['funding']} spot={gaps['spot']} perp={gaps['perp']}"
         )
 
-    total_rows = sum(len(df) for df in per_coin.values())
-    print(f"\noverall: {total_rows} joined hourly rows across {len(ASSETS)} coins")
+        resampled = _add_basis_and_resample_funding(joined)
+        partial_dropped = len(joined) - len(resampled)
+        per_coin[coin] = resampled
+        print(
+            f"     basis: median={resampled['basis_bps'].median():+.2f} bps  "
+            f"min/max={resampled['basis_bps'].min():+.1f}/{resampled['basis_bps'].max():+.1f} bps"
+        )
+        print(
+            f"     funding (8h sums): median={resampled['funding_rate'].median()*1e4:+.3f} bps  "
+            f"min/max={resampled['funding_rate'].min()*1e4:+.2f}/{resampled['funding_rate'].max()*1e4:+.2f} bps  "
+            f"(dropped {partial_dropped} bars in incomplete 8h windows)"
+        )
 
-    # Steps 3 (basis derivation + 8h funding resample), 4 (regime
-    # labels + threshold tuning), 5 (split + commitment + persist), and
-    # 6 (report) land in subsequent commits.
-    print("\n[skeleton] basis / regime / persist not yet implemented (steps 3-6).")
+    total_rows = sum(len(df) for df in per_coin.values())
+    print(f"\noverall: {total_rows} hourly rows across {len(ASSETS)} coins")
+
+    # Steps 4 (regime labels + threshold tuning), 5 (split + commitment +
+    # persist), and 6 (report) land in subsequent commits.
+    print("\n[skeleton] regime / split / persist not yet implemented (steps 4-6).")
     return 0
 
 
