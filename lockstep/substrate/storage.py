@@ -55,6 +55,15 @@ class StorageAdapter(Protocol):
     derive it from ciphertext alone — the encryption adapter computes it
     from the cleartext payload before encrypting. See ``substrate.encryption``
     for the helper that produces both halves.
+
+    ``authorize_attestation`` is intentionally NOT on this Protocol.
+    Concrete adapters expose it as test scaffolding (in-process pubkey
+    set) so demo and conformance code can construct either adapter and
+    add a grader pubkey before calling ``load_dataset_full``. In
+    production the authorization is the ERC-7857 oracle re-encryption
+    ceremony — that's a chain operation, not a storage operation, and
+    leaks if pulled into the storage interface. Real adapters keep the
+    method only until the chain-side flow is wired up (Day 5+).
     """
 
     def upload_encrypted_solution(
@@ -103,7 +112,15 @@ class MockStorageAdapter:
         self._allowed_attestations: set[Bytes32Hex] = set()
 
     def authorize_attestation(self, pubkey: Bytes32Hex) -> None:
-        """Register an attestation pubkey as authorized for full-dataset reads."""
+        """Register an attestation pubkey as authorized for full-dataset reads.
+
+        **Test scaffolding, not part of the StorageAdapter Protocol.** In
+        production the authorization comes from the ERC-7857 oracle
+        re-encryption ceremony on the chain side, not from the storage
+        adapter. Mock keeps an in-process set so the conformance suite
+        and demo can construct either adapter and call this directly.
+        Removed once the chain-side authorization flow lands (Day 5+).
+        """
         self._allowed_attestations.add(pubkey.lower())
 
     def upload_encrypted_solution(

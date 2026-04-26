@@ -177,10 +177,13 @@ class RealStorageAdapter:
     def authorize_attestation(self, pubkey: Bytes32Hex) -> None:
         """Register an attestation pubkey as authorized for full-dataset reads.
 
-        Mocks the ERC-7857 oracle re-encryption ceremony; production
-        will replace this with a real on-chain authorization flow.
-        Mirrors ``MockStorageAdapter.authorize_attestation`` so tests
-        and configs can target either adapter.
+        **Test scaffolding, not part of the StorageAdapter Protocol.**
+        Mirrors ``MockStorageAdapter.authorize_attestation`` so the
+        conformance suite and demo can construct either adapter and
+        seed an authorized pubkey before calling ``load_dataset_full``.
+        In production the authorization comes from the ERC-7857 oracle
+        re-encryption ceremony on the chain side — this method goes
+        away once that flow lands (Day 5+).
         """
         self._authorized_attestations.add(pubkey.lower())
 
