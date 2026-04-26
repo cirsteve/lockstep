@@ -55,3 +55,8 @@ coverage.xml
 # Project artefacts
 .local_storage/
 *.log
+
+# Data inputs (raw market data pulled from gecko's TA store) and uv lockfile
+/data/
+/logs/
+uv.lock

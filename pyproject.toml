@@ -19,6 +19,8 @@ dependencies = [
     "requests>=2.31",
     "web3>=6.15",
     "eth-account>=0.11",
+    "pandas>=3.0.2",
+    "pyarrow>=24.0.0",
 ]
 
 [project.optional-dependencies]
