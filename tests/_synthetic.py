@@ -139,6 +139,7 @@ def build_market_neutral_series(
                 "spot_close": round(spot, 6),
                 "perp_close": round(perp, 6),
                 "basis": round(basis, 6),
+                "basis_bps": round(basis / spot * 10_000, 6),
                 "regime": regime,
             }
         )
