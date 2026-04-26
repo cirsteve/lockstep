@@ -24,6 +24,13 @@ def test_serialize_deserialize_roundtrips():
     assert back == sol
 
 
+def test_deserialize_rejects_trailing_bytes():
+    sol = MarketNeutralSolution(source=SOURCE, parameters=b"")
+    blob = sol.serialize() + b"\x00trailing"
+    with pytest.raises(ValueError, match="trailing bytes"):
+        MarketNeutralSolution.deserialize(blob)
+
+
 def test_plaintext_commitment_stable_across_roundtrips():
     sol1 = MarketNeutralSolution(source=SOURCE)
     sol2 = MarketNeutralSolution.deserialize(sol1.serialize())

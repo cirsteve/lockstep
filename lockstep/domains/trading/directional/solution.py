@@ -124,9 +124,17 @@ class DirectionalSolution(SolutionPayload):
         offset += src_len
         param_len = struct.unpack(">I", data[offset : offset + 4])[0]
         offset += 4
-        if len(data) < offset + param_len:
+        end = offset + param_len
+        if len(data) < end:
             raise ValueError("DirectionalSolution.deserialize: truncated parameters")
-        parameters = data[offset : offset + param_len]
+        if len(data) != end:
+            # plaintext_commitment is the hash of canonical bytes — accepting
+            # trailing data would let two byte sequences map to one solution
+            # and silently break commitment uniqueness.
+            raise ValueError(
+                "DirectionalSolution.deserialize: trailing bytes after parameters"
+            )
+        parameters = data[offset:end]
         return cls(source=source, parameters=parameters)
 
     def instantiate(self) -> Callable[[list[dict], dict], dict]:

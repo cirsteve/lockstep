@@ -148,10 +148,16 @@ class MarketNeutralGrader(Grader[MarketNeutralSolution, MarketNeutralDataset]):
         trade_count = 0
         state: dict[str, Any] = {}
 
+        # ``history`` is the same growing list across iterations so the
+        # grader is O(n) overall instead of O(n^2) from per-step slicing.
+        # Solvers must treat ``funding_window`` / ``basis_window`` as
+        # read-only — the substrate passes the live list, not a copy.
+        # The mock dataset folds funding + spot/perp into one row, so
+        # both windows reference the same history list.
+        history: list[dict] = []
         for idx in range(1, len(bars_t)):
-            history_funding = list(bars_t[:idx])  # acts as both windows for the mock dataset
-            history_basis = list(bars_t[:idx])
-            decision = signal(history_funding, history_basis, state)
+            history.append(bars_t[idx - 1])
+            decision = signal(history, history, state)
             spot_leg = decision.get("spot", {"direction": "flat", "size": 0.0})
             perp_leg = decision.get("perp", {"direction": "flat", "size": 0.0})
             spot_pos = _signed_position(spot_leg)

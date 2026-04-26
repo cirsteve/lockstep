@@ -68,7 +68,7 @@ The grader's output must round-trip through canonical JSON without precision los
 ## Mocking conventions
 
 Things mocked for the hackathon, with production paths in code comments:
-- Encryption ceremony (mock x25519 + XChaCha20-Poly1305)
+- Encryption ceremony (mock x25519 + ChaCha20-Poly1305)
 - Sealed private holdout (separate file the producer's environment lacks access to)
 - Cross-architecture determinism (hand-enforced fixed-precision arithmetic)
 - Domain registry (in-memory dict)

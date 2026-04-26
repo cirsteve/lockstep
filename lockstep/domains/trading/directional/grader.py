@@ -153,9 +153,13 @@ class DirectionalGrader(Grader[DirectionalSolution, DirectionalDataset]):
 
         # Walk chronologically; per bar t, decide based on history through
         # bar t-1, realize the close-over-close return between t-1 and t.
+        # ``window`` is the same growing list across iterations so the
+        # grader is O(n) overall instead of O(n^2) from per-step slicing.
+        # Solvers must treat ``window`` as read-only — the substrate
+        # passes the live list, not a copy.
+        window: list[dict] = []
         for idx in range(1, len(bars_t)):
-            history = list(bars_t[:idx])
-            window = history  # streaming: solver gets full history; uses only what it wants
+            window.append(bars_t[idx - 1])
             decision = signal(window, state)
             position = _signed_position(decision)
 

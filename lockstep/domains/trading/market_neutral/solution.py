@@ -121,9 +121,14 @@ class MarketNeutralSolution(SolutionPayload):
         offset += src_len
         param_len = struct.unpack(">I", data[offset : offset + 4])[0]
         offset += 4
-        if len(data) < offset + param_len:
+        end = offset + param_len
+        if len(data) < end:
             raise ValueError("MarketNeutralSolution.deserialize: truncated parameters")
-        parameters = data[offset : offset + param_len]
+        if len(data) != end:
+            raise ValueError(
+                "MarketNeutralSolution.deserialize: trailing bytes after parameters"
+            )
+        parameters = data[offset:end]
         return cls(source=source, parameters=parameters)
 
     def instantiate(self) -> Callable[[list[dict], list[dict], dict], dict]:
