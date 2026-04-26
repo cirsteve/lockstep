@@ -30,6 +30,13 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.8",
 ]
+# Used only by `scripts/datasets/build_*.py`. Heavy (~150 MB once
+# numpy + pandas + pyarrow land); not needed by the lockstep package
+# itself. Run `uv sync --extra datasets` before executing the builders.
+datasets = [
+    "pandas>=3.0.2",
+    "pyarrow>=24.0.0",
+]
 
 [project.scripts]
 lockstep = "lockstep.cli:main"
