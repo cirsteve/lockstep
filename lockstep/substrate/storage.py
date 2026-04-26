@@ -24,13 +24,25 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
+from lockstep.errors import SubstrateError, TrustViolation
 from lockstep.evaluation.canonical import Bytes32Hex
 from lockstep.evaluation.receipt import Receipt
 from lockstep.evaluation.solution import DatasetCommitment, EncryptedSolution
 
 
-class StorageError(RuntimeError):
-    """Raised when a storage operation fails (integrity, authorization, missing)."""
+class StorageError(SubstrateError):
+    """Raised when a storage operation fails for non-trust reasons.
+
+    Use for transient or operational failures: missing object, network
+    error, missing/invalid service credentials (e.g. the storage
+    backend rejects our API key). These are retry-able.
+
+    Trust failures — where the bytes the backend returns disagree with
+    a commitment, a receipt's signature doesn't verify, or a caller's
+    attestation pubkey isn't in the authorized set for sealed data —
+    raise ``TrustViolation`` instead. Those are byzantine evidence, not
+    transient: never retry them.
+    """
 
 
 class StorageAdapter(Protocol):
@@ -43,6 +55,15 @@ class StorageAdapter(Protocol):
     derive it from ciphertext alone — the encryption adapter computes it
     from the cleartext payload before encrypting. See ``substrate.encryption``
     for the helper that produces both halves.
+
+    ``authorize_attestation`` is intentionally NOT on this Protocol.
+    Concrete adapters expose it as test scaffolding (in-process pubkey
+    set) so demo and conformance code can construct either adapter and
+    add a grader pubkey before calling ``load_dataset_full``. In
+    production the authorization is the ERC-7857 oracle re-encryption
+    ceremony — that's a chain operation, not a storage operation, and
+    leaks if pulled into the storage interface. Real adapters keep the
+    method only until the chain-side flow is wired up (Day 5+).
     """
 
     def upload_encrypted_solution(
@@ -91,7 +112,15 @@ class MockStorageAdapter:
         self._allowed_attestations: set[Bytes32Hex] = set()
 
     def authorize_attestation(self, pubkey: Bytes32Hex) -> None:
-        """Register an attestation pubkey as authorized for full-dataset reads."""
+        """Register an attestation pubkey as authorized for full-dataset reads.
+
+        **Test scaffolding, not part of the StorageAdapter Protocol.** In
+        production the authorization comes from the ERC-7857 oracle
+        re-encryption ceremony on the chain side, not from the storage
+        adapter. Mock keeps an in-process set so the conformance suite
+        and demo can construct either adapter and call this directly.
+        Removed once the chain-side authorization flow lands (Day 5+).
+        """
         self._allowed_attestations.add(pubkey.lower())
 
     def upload_encrypted_solution(
@@ -121,7 +150,17 @@ class MockStorageAdapter:
     def download_encrypted_solution(self, uri: str) -> bytes:
         if uri not in self._objects:
             raise StorageError(f"unknown storage uri: {uri}")
-        return self._objects[uri]
+        bundle = self._objects[uri]
+        # Bundle hash is encoded in the URI on upload; recompute on
+        # download and compare so any in-process tampering with
+        # _objects shows up as a TrustViolation.
+        expected_hash = uri.rsplit("/", 1)[-1]
+        actual_hash = "0x" + hashlib.sha256(bundle).hexdigest()
+        if actual_hash != expected_hash:
+            raise TrustViolation(
+                f"bundle hash mismatch for {uri}: expected {expected_hash}, got {actual_hash}"
+            )
+        return bundle
 
     def upload_receipt(self, receipt: Receipt) -> str:
         uri = f"mock://receipt/{receipt.receipt_id}"
@@ -131,7 +170,14 @@ class MockStorageAdapter:
     def download_receipt(self, uri: str) -> Receipt:
         if uri not in self._receipts:
             raise StorageError(f"unknown receipt uri: {uri}")
-        return self._receipts[uri]
+        receipt = self._receipts[uri]
+        # Verify signature on the way out — a mock that hands back a
+        # tampered receipt would let bugs propagate to validators.
+        if not receipt.enclave.verify_signature(receipt.canonical_signing_payload()):
+            raise TrustViolation(
+                f"receipt signature invalid for {uri} (pubkey {receipt.enclave.pubkey})"
+            )
+        return receipt
 
     def upload_dataset(
         self,
@@ -147,7 +193,7 @@ class MockStorageAdapter:
         if payload is None:
             raise StorageError(f"no public payload for commitment uri {commitment.storage_uri}")
         if _payload_root(payload) != commitment.public_root:
-            raise StorageError(
+            raise TrustViolation(
                 f"public payload root mismatch for commitment {commitment.storage_uri}"
             )
         return payload
@@ -156,7 +202,7 @@ class MockStorageAdapter:
         self, commitment: DatasetCommitment, attestation_pubkey: Bytes32Hex
     ) -> bytes:
         if attestation_pubkey.lower() not in self._allowed_attestations:
-            raise StorageError(
+            raise TrustViolation(
                 f"attestation pubkey {attestation_pubkey} not authorized "
                 "for full dataset access"
             )
@@ -165,7 +211,7 @@ class MockStorageAdapter:
         if private_payload is None:
             raise StorageError(f"no private payload for commitment uri {commitment.storage_uri}")
         if _payload_root(private_payload) != commitment.private_root:
-            raise StorageError(
+            raise TrustViolation(
                 f"private payload root mismatch for commitment {commitment.storage_uri}"
             )
         return public_payload + private_payload

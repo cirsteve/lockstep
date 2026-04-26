@@ -43,7 +43,7 @@ def test_demo_exits_zero(demo_output: str) -> None:
 
 def test_demo_prints_each_step_section(demo_output: str) -> None:
     expected_sections = [
-        "Step 1 — Initialize Mock substrate adapters",
+        "Step 1 — Initialize substrate adapters",
         "Step 2 — Register both trading evaluations",
         "Step 3 — Build datasets and upload to storage",
         "Step 4 — Grade reference strategies and mint iNFTs",
@@ -66,3 +66,23 @@ def test_demo_mints_five_inft_tokens(demo_output: str) -> None:
 
 def test_demo_emits_live_execution_receipt(demo_output: str) -> None:
     assert "LIVE_EXECUTION receipt" in demo_output
+
+
+def test_demo_with_galileo_config_fails_with_not_implemented_error() -> None:
+    """Wiring sanity check: --config galileo.yaml routes storage through
+    RealStorageAdapter, whose method bodies raise NotImplementedError
+    until Day 4. Confirms the factory + config plumbing actually swaps
+    the adapter rather than silently falling back to Mock."""
+    galileo_config = REPO_ROOT / "config" / "galileo.yaml"
+    result = subprocess.run(  # noqa: S603 — pytest-controlled invocation
+        [sys.executable, str(DEMO_PATH), "--config", str(galileo_config)],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=str(REPO_ROOT),
+    )
+    assert result.returncode != 0
+    combined = result.stdout + result.stderr
+    assert "NotImplementedError" in combined
+    assert "Day 4" in combined

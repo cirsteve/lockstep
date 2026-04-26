@@ -1,0 +1,7 @@
+# Local development config — all substrate adapters are Mock.
+# This is the default for `examples/demo_flow.py` and the integration tests.
+# Use `config/galileo.yaml` to point storage at the real 0G Galileo testnet
+# (Day 4+, requires LOCKSTEP_0G_PRIVATE_KEY and the TS storage service running).
+
+storage:
+  kind: mock

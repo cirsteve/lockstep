@@ -1,12 +1,12 @@
-"""End-to-end demo flow exercising all six mock substrate adapters.
+"""End-to-end demo flow exercising the substrate adapters.
 
 Steps (per ``spec/spec1.md`` Section 5.2):
-  1. Initialize Mock {Storage, Chain, Attestation, Encryption, Transport, Payment}
+  1. Initialize substrate adapters (storage from ``--config``, others Mock)
   2. Register both trading evaluations (auto-registers their Evaluators
      via the Layer 2 in-memory registry)
   3. For each reference strategy:
        a. Encrypt the solution
-       b. Upload to MockStorage
+       b. Upload to storage
        c. Run grader (full path)
        d. Produce attested Receipt
        e. Mint iNFT on MockChain
@@ -17,18 +17,24 @@ Steps (per ``spec/spec1.md`` Section 5.2):
      authorize_usage on MockChain, sealed-execute (logs the trade)
   7. Generate a LIVE_EXECUTION receipt for the rental, append to chain
 
-Runs in well under 30 seconds on a laptop. No network IO. No randomness
-inside the grading path. The script is the integration testbed for the
-substrate; ``tests/integration/test_demo_flow.py`` runs it as a
-subprocess in Section 6.
+Default config (``config/local.yaml``) makes every adapter Mock so the
+script runs offline in well under 30 seconds. ``config/galileo.yaml``
+swaps storage for the real 0G Galileo adapter (Day 4+; requires the TS
+storage service running and ``LOCKSTEP_0G_PRIVATE_KEY`` set).
+
+The script is the integration testbed for the substrate;
+``tests/integration/test_demo_flow.py`` runs it as a subprocess.
 """
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import sys
 from datetime import UTC, datetime
 from typing import Any
+
+import yaml
 
 from lockstep.domains.trading.directional import (
     DirectionalDataset,
@@ -53,13 +59,14 @@ from lockstep.evaluation.solution import DatasetCommitment
 from lockstep.substrate.attestation import MockAttestationAdapter
 from lockstep.substrate.chain import MockChainAdapter
 from lockstep.substrate.encryption import MockEncryptionAdapter, generate_keypair
+from lockstep.substrate.factory import get_storage_adapter
 from lockstep.substrate.payment import MockPaymentAdapter
-from lockstep.substrate.storage import MockStorageAdapter
 from lockstep.substrate.transport import MockTransportAdapter
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 DIRECTIONAL_DIR = REPO_ROOT / "examples" / "strategies" / "directional"
 MARKET_NEUTRAL_DIR = REPO_ROOT / "examples" / "strategies" / "market_neutral"
+DEFAULT_CONFIG = REPO_ROOT / "config" / "local.yaml"
 
 
 def _section(title: str) -> None:
@@ -185,15 +192,37 @@ def _strategy_source(path: pathlib.Path) -> str:
 # Demo
 # ---------------------------------------------------------------------------
 
-def main() -> int:
-    _section("Step 1 — Initialize Mock substrate adapters")
-    storage = MockStorageAdapter()
+def _load_config(path: pathlib.Path) -> dict[str, Any]:
+    with path.open(encoding="utf-8") as fh:
+        loaded = yaml.safe_load(fh) or {}
+    if not isinstance(loaded, dict):
+        raise ValueError(f"config at {path} must be a YAML mapping at the top level")
+    return loaded
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        type=pathlib.Path,
+        default=DEFAULT_CONFIG,
+        help="Path to a YAML config file (default: config/local.yaml).",
+    )
+    args = parser.parse_args(argv)
+    config = _load_config(args.config)
+
+    _section("Step 1 — Initialize substrate adapters")
+    storage = get_storage_adapter(config)
     chain = MockChainAdapter()
     attestation = MockAttestationAdapter()
     encryption = MockEncryptionAdapter()
     transport = MockTransportAdapter("marketplace")
     payment = MockPaymentAdapter()
-    print("storage, chain, attestation, encryption, transport, payment ready")
+    storage_kind = (config.get("storage") or {}).get("kind", "mock")
+    print(
+        f"config: {args.config.name}  storage: {storage_kind}  "
+        "chain/attestation/encryption/transport/payment: mock"
+    )
 
     _section("Step 2 — Register both trading evaluations")
     dir_eval = TradingDirectionalEvaluation()

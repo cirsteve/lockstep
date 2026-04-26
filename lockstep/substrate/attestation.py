@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.serialization import (
     PublicFormat,
 )
 
+from lockstep.errors import SubstrateError
 from lockstep.evaluation.canonical import Bytes32Hex
 from lockstep.evaluation.evaluation import GraderResult
 from lockstep.evaluation.evaluator import Evaluator
@@ -39,7 +40,7 @@ from lockstep.evaluation.receipt import (
 )
 
 
-class AttestationError(RuntimeError):
+class AttestationError(SubstrateError):
     """Raised when an attestation fails to verify or a key is malformed."""
 
 

@@ -6,8 +6,9 @@ import hashlib
 
 import pytest
 
+from lockstep.errors import TrustViolation
 from lockstep.evaluation.solution import DatasetCommitment
-from lockstep.substrate.storage import MockStorageAdapter, StorageError
+from lockstep.substrate.storage import MockStorageAdapter
 
 
 def _root(payload: bytes) -> str:
@@ -50,7 +51,7 @@ def test_download_with_wrong_root_raises():
     adapter.upload_dataset(commitment, public, private)
 
     bad_commitment = commitment.model_copy(update={"public_root": "0x" + "00" * 32})
-    with pytest.raises(StorageError, match="root"):
+    with pytest.raises(TrustViolation, match="root"):
         adapter.load_dataset_public(bad_commitment)
 
 
@@ -61,7 +62,7 @@ def test_load_dataset_full_unauthorized_pubkey_raises():
     commitment = _commitment_for(public, private)
     adapter.upload_dataset(commitment, public, private)
 
-    with pytest.raises(StorageError, match="not authorized"):
+    with pytest.raises(TrustViolation, match="not authorized"):
         adapter.load_dataset_full(commitment, attestation_pubkey="0x" + "ff" * 32)
 
 

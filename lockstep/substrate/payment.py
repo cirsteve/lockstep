@@ -16,10 +16,11 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from lockstep.errors import SubstrateError
 from lockstep.evaluation.canonical import Address, Bytes32Hex
 
 
-class PaymentError(RuntimeError):
+class PaymentError(SubstrateError):
     """Raised when a quote can't be priced or a payment fails to verify."""
 
 
