@@ -2,7 +2,7 @@
   "name": "@lockstep/storage-ts",
   "version": "0.1.0",
   "private": true,
-  "description": "Long-lived HTTP service wrapping @0glabs/0g-ts-sdk for the Lockstep RealStorageAdapter.",
+  "description": "Long-lived HTTP service wrapping @0gfoundation/0g-ts-sdk for the Lockstep RealStorageAdapter.",
   "main": "server.ts",
   "scripts": {
     "dev": "tsx watch server.ts",
@@ -10,8 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@0gfoundation/0g-ts-sdk": "^1.2.6",
     "dotenv": "^16.4.7",
-    "ethers": "^6.13.4",
+    "ethers": "6.13.1",
     "express": "^4.21.2"
   },
   "devDependencies": {
