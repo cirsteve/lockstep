@@ -255,20 +255,24 @@ class RealStorageAdapter:
         """Fetch transaction receipt + tx, return total spend in 0G.
 
         cost = gasUsed * effectiveGasPrice + tx.value (storage market fee).
-        Returns ``_UPLOAD_COST_BASELINE`` if the RPC fetch fails so the
-        cost tracker can't silently zero out a real spend.
+
+        Falls back to ``_UPLOAD_COST_BASELINE`` on any failure — RPC
+        unreachable, missing fields (legacy receipts may lack
+        ``effectiveGasPrice``; we fall back to the tx's ``gasPrice``),
+        decode errors, anything. Silent zero would let a runaway loop
+        drain the faucet without registering the spend.
         """
         tx_hash_hex = HexStr(tx_hash)
         try:
             receipt = self._w3.eth.get_transaction_receipt(tx_hash_hex)
             tx = self._w3.eth.get_transaction(tx_hash_hex)
+            gas_price = receipt.get("effectiveGasPrice") or tx.get("gasPrice")
+            if gas_price is None:
+                return _UPLOAD_COST_BASELINE
+            cost_wei = int(receipt["gasUsed"]) * int(gas_price) + int(tx["value"])
+            return Decimal(cost_wei) / Decimal(10**18)
         except Exception:
             return _UPLOAD_COST_BASELINE
-        cost_wei = (
-            int(receipt["gasUsed"]) * int(receipt["effectiveGasPrice"])
-            + int(tx["value"])
-        )
-        return Decimal(cost_wei) / Decimal(10**18)
 
     def _emit_log(
         self,
@@ -300,30 +304,37 @@ class RealStorageAdapter:
         plaintext_commitment: Bytes32Hex,
         recipient_pubkey: Bytes32Hex,
     ) -> EncryptedSolution:
-        def fn() -> EncryptedSolution:
-            t0 = time.monotonic()
-            resp = self._http.upload_encrypted_solution(
+        # Only the network call lives inside _with_retry. Cost charging
+        # and log emission happen exactly once after the upload succeeds.
+        # See lockstep/substrate/storage_real.py:_CostTracker docstring
+        # for why this matters: _cost.charge raises SubstrateError on
+        # budget exhaustion, and if that fired inside the retried fn()
+        # we'd burn an extra paid upload per retry.
+        t0 = time.monotonic()
+
+        def fn() -> dict[str, Any]:
+            return self._http.upload_encrypted_solution(
                 bundle,
                 plaintext_commitment=plaintext_commitment,
                 recipient_pubkey=recipient_pubkey,
             )
-            cost = self._fetch_cost_0g(resp["tx_hash"])
-            self._cost.charge(cost)
-            self._emit_log(
-                "upload_encrypted_solution",
-                uri=resp["storage_uri"],
-                bytes_=len(bundle),
-                cost=cost,
-                latency_ms=(time.monotonic() - t0) * 1000,
-            )
-            return EncryptedSolution(
-                plaintext_commitment=plaintext_commitment,
-                bundle_hash=resp["bundle_hash"],
-                storage_uri=resp["storage_uri"],
-                recipient_pubkey=recipient_pubkey,
-            )
 
-        return _with_retry(fn, budget=self._retry_budget)
+        resp = _with_retry(fn, budget=self._retry_budget)
+        cost = self._fetch_cost_0g(resp["tx_hash"])
+        self._cost.charge(cost)
+        self._emit_log(
+            "upload_encrypted_solution",
+            uri=resp["storage_uri"],
+            bytes_=len(bundle),
+            cost=cost,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
+        return EncryptedSolution(
+            plaintext_commitment=plaintext_commitment,
+            bundle_hash=resp["bundle_hash"],
+            storage_uri=resp["storage_uri"],
+            recipient_pubkey=recipient_pubkey,
+        )
 
     def download_encrypted_solution(self, uri: str) -> bytes:
         def fn() -> bytes:
@@ -340,22 +351,25 @@ class RealStorageAdapter:
         return _with_retry(fn, budget=self._retry_budget)
 
     def upload_receipt(self, receipt: Receipt) -> str:
-        def fn() -> str:
-            t0 = time.monotonic()
-            body = canonical_json_bytes(receipt.model_dump(mode="json"))
-            resp = self._http.upload_receipt(body)
-            cost = self._fetch_cost_0g(resp["tx_hash"])
-            self._cost.charge(cost)
-            self._emit_log(
-                "upload_receipt",
-                uri=resp["uri"],
-                bytes_=len(body),
-                cost=cost,
-                latency_ms=(time.monotonic() - t0) * 1000,
-            )
-            return resp["uri"]
+        # See `upload_encrypted_solution` for why cost-charge sits
+        # outside `_with_retry`.
+        t0 = time.monotonic()
+        body = canonical_json_bytes(receipt.model_dump(mode="json"))
 
-        return _with_retry(fn, budget=self._retry_budget)
+        def fn() -> dict[str, Any]:
+            return self._http.upload_receipt(body)
+
+        resp = _with_retry(fn, budget=self._retry_budget)
+        cost = self._fetch_cost_0g(resp["tx_hash"])
+        self._cost.charge(cost)
+        self._emit_log(
+            "upload_receipt",
+            uri=resp["uri"],
+            bytes_=len(body),
+            cost=cost,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
+        return resp["uri"]
 
     def download_receipt(self, uri: str) -> Receipt:
         from lockstep.evaluation.receipt import Receipt as _Receipt
@@ -387,27 +401,32 @@ class RealStorageAdapter:
         public_payload: bytes,
         private_payload: bytes,
     ) -> None:
-        def fn() -> None:
-            t0 = time.monotonic()
-            resp = self._http.upload_dataset(
+        # See `upload_encrypted_solution` for why cost-charge sits
+        # outside `_with_retry`. The dataset case fires *two* paid
+        # uploads; doubling them up via a budget-exhausted retry would
+        # cost up to `2 * max_attempts` × baseline.
+        t0 = time.monotonic()
+
+        def fn() -> dict[str, Any]:
+            return self._http.upload_dataset(
                 public_root=commitment.public_root,
                 private_root=commitment.private_root,
                 public_payload=public_payload,
                 private_payload=private_payload,
             )
-            cost_pub = self._fetch_cost_0g(resp["public_tx_hash"])
-            cost_priv = self._fetch_cost_0g(resp["private_tx_hash"])
-            cost = cost_pub + cost_priv
-            self._cost.charge(cost)
-            self._emit_log(
-                "upload_dataset",
-                uri=commitment.storage_uri,
-                bytes_=len(public_payload) + len(private_payload),
-                cost=cost,
-                latency_ms=(time.monotonic() - t0) * 1000,
-            )
 
-        _with_retry(fn, budget=self._retry_budget)
+        resp = _with_retry(fn, budget=self._retry_budget)
+        cost = self._fetch_cost_0g(resp["public_tx_hash"]) + self._fetch_cost_0g(
+            resp["private_tx_hash"]
+        )
+        self._cost.charge(cost)
+        self._emit_log(
+            "upload_dataset",
+            uri=commitment.storage_uri,
+            bytes_=len(public_payload) + len(private_payload),
+            cost=cost,
+            latency_ms=(time.monotonic() - t0) * 1000,
+        )
 
     def load_dataset_public(self, commitment: DatasetCommitment) -> bytes:
         def fn() -> bytes:

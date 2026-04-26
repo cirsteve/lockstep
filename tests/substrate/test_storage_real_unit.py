@@ -191,6 +191,51 @@ def test_upload_encrypted_solution_422_raises_trust_violation_without_retry(
 
 
 @respx.mock
+def test_upload_encrypted_solution_budget_exhausted_does_not_double_upload(
+    tmp_path: Path,
+) -> None:
+    """Regression: cost charging must sit outside _with_retry.
+
+    If `_cost.charge` raised SubstrateError inside the retried fn(),
+    `_with_retry` would catch it and call fn() again — burning a real
+    paid upload per retry. Tighten the budget so the first charge
+    overflows; assert the network call fired exactly once and
+    `cost_spent()` reflects that single (charged) upload's cost.
+    """
+    bundle = b"encrypted-bundle"
+    route = respx.post(f"{SERVICE_URL}/upload-encrypted-solution").mock(
+        return_value=httpx.Response(200, json=_ok_upload_solution_response(bundle))
+    )
+
+    # Budget below baseline so the first charge overflows.
+    adapter = RealStorageAdapter(
+        rpc_url="http://test-rpc:8545",
+        indexer_url="http://test-indexer:5678",
+        service_url=SERVICE_URL,
+        log_path=tmp_path / "storage.jsonl",
+        token_budget=Decimal("0.0001"),  # < _UPLOAD_COST_BASELINE = 0.0012
+        retry_budget=_RetryBudget(
+            base_delay_seconds=0.0,
+            max_delay_seconds=0.0,
+            max_attempts=4,
+            wall_clock_seconds=10.0,
+        ),
+    )
+    with pytest.raises(SubstrateError, match="token budget exhausted"):
+        adapter.upload_encrypted_solution(
+            bundle,
+            plaintext_commitment="0x" + "cc" * 32,
+            recipient_pubkey="0x" + "bb" * 32,
+        )
+
+    # Critical: the network call fired exactly ONCE despite the retry
+    # budget allowing 4 attempts. Pre-fix, this would be 4.
+    assert route.call_count == 1
+    # No cost charged (the charge raised before incrementing).
+    assert adapter.cost_spent() == Decimal("0")
+
+
+@respx.mock
 def test_upload_dataset_charges_cost_for_both_halves(tmp_path: Path) -> None:
     public_payload = b"public-data"
     private_payload = b"private-data"
