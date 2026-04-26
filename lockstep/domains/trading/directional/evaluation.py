@@ -119,43 +119,43 @@ _SCORE_DIMENSIONS: list[ScoreDimension] = [
 ]
 
 
+EVALUATOR = Evaluator.build(
+    domain_name="trading_directional",
+    domain_version="v1",
+    solver_input_schema=_INPUT_SCHEMA,
+    solver_output_schema=_OUTPUT_SCHEMA,
+    invocation_model="streaming",
+    accepted_grader_versions=[DirectionalGrader.version()],
+    dataset_schema_version="v1",
+    holdout_policy=HoldoutPolicy(
+        public_fraction=0.8,
+        rotation_cadence_days=None,
+        rotation_governance="marketplace_admin",
+    ),
+    score_dimensions=_SCORE_DIMENSIONS,
+    rank_dimension="worst_regime_sharpe",
+    dispute_policy=DisputePolicy(
+        challenge_window_seconds=86_400,
+        minimum_validators_for_consensus=1,
+        resolution_method="replay",
+    ),
+    metadata={
+        "purpose": "Directional perp strategies on BTC/ETH/SOL hourly bars.",
+        "annualization": "hourly bars → sqrt(24*365)",
+    },
+)
+register_evaluator(EVALUATOR)
+
+
 class TradingDirectionalEvaluation(Evaluation[DirectionalSolution, DirectionalDataset]):
     """Layer 3 contract for the trading-directional domain."""
-
-    def __init__(self) -> None:
-        self._evaluator = Evaluator.build(
-            domain_name="trading_directional",
-            domain_version="v1",
-            solver_input_schema=_INPUT_SCHEMA,
-            solver_output_schema=_OUTPUT_SCHEMA,
-            invocation_model="streaming",
-            accepted_grader_versions=[DirectionalGrader.version()],
-            dataset_schema_version="v1",
-            holdout_policy=HoldoutPolicy(
-                public_fraction=0.8,
-                rotation_cadence_days=None,
-                rotation_governance="marketplace_admin",
-            ),
-            score_dimensions=_SCORE_DIMENSIONS,
-            rank_dimension="worst_regime_sharpe",
-            dispute_policy=DisputePolicy(
-                challenge_window_seconds=86_400,
-                minimum_validators_for_consensus=1,
-                resolution_method="replay",
-            ),
-            metadata={
-                "purpose": "Directional perp strategies on BTC/ETH/SOL hourly bars.",
-                "annualization": "hourly bars → sqrt(24*365)",
-            },
-        )
-        register_evaluator(self._evaluator)
 
     @property
     def domain(self) -> str:
         return "trading_directional"
 
     def evaluator(self) -> Evaluator:
-        return self._evaluator
+        return EVALUATOR
 
     @property
     def solver_interface(self) -> SolverInterface:

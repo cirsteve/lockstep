@@ -345,12 +345,16 @@ def main() -> int:
     sample_evaluation = sample["evaluation"]
     if sample["domain"] == "trading_directional":
         sample_dataset = dir_ds
+        sample_solution_cls = DirectionalSolution
+        sample_strategy_dir = DIRECTIONAL_DIR
     else:
         sample_dataset = mn_ds
+        sample_solution_cls = MarketNeutralSolution
+        sample_strategy_dir = MARKET_NEUTRAL_DIR
     public_only_grade = sample_evaluation.grader().grade(
         sample_evaluation.deserialize_solution(
-            DirectionalSolution(
-                source=_strategy_source(DIRECTIONAL_DIR / f"{sample['name']}.py")
+            sample_solution_cls(
+                source=_strategy_source(sample_strategy_dir / f"{sample['name']}.py")
             ).serialize()
         ),
         sample_dataset.public_view(),
@@ -394,18 +398,17 @@ def main() -> int:
     print(f"  authorize_usage tx: {auth_tx[:20]}…")
 
     # Sealed executor "runs" the strategy and emits a live-execution receipt.
-    live_grade = top["evaluation"].grader().grade(
-        top["evaluation"].deserialize_solution(
-            DirectionalSolution(
-                source=_strategy_source(DIRECTIONAL_DIR / f"{top['name']}.py")
-            ).serialize()
+    if top["domain"] == "trading_directional":
+        top_solution = DirectionalSolution(
+            source=_strategy_source(DIRECTIONAL_DIR / f"{top['name']}.py")
         )
-        if top["domain"] == "trading_directional"
-        else MarketNeutralSolution(
+        top_dataset = dir_ds
+    else:
+        top_solution = MarketNeutralSolution(
             source=_strategy_source(MARKET_NEUTRAL_DIR / f"{top['name']}.py")
-        ),
-        dir_ds if top["domain"] == "trading_directional" else mn_ds,
-    )
+        )
+        top_dataset = mn_ds
+    live_grade = top["evaluation"].grader().grade(top_solution, top_dataset)
     live_receipt = attestation.produce_receipt(
         grader_result=live_grade,
         evaluator=top["evaluation"].evaluator(),

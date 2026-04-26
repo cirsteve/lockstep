@@ -47,12 +47,17 @@ class MarketNeutralDataset(DatasetPayload):
     walk_forward_windows: tuple[tuple[int, int], ...]
 
     def verify_integrity(self) -> bool:
-        public_root = _hash_bars(self.public_bars)
-        if public_root != self.commitment.public_root:
+        """Same contract as ``DirectionalDataset.verify_integrity``.
+
+        On a public-only view (``private_bars == ()``) the private-root
+        check is skipped — see the directional dataset's docstring for
+        rationale.
+        """
+        if _hash_bars(self.public_bars) != self.commitment.public_root:
             return False
-        private_root = _hash_bars(self.private_bars)
-        if private_root != self.commitment.private_root:
-            return False
+        if self.has_private_data():
+            if _hash_bars(self.private_bars) != self.commitment.private_root:
+                return False
         return True
 
     def public_view(self) -> MarketNeutralDataset:

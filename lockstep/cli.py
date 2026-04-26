@@ -1,6 +1,6 @@
-"""Lockstep CLI — minimal stub.
+"""Lockstep CLI - minimal stub.
 
-Real implementations of mint/validate/rent ship Day 4–5. For now the
+Real implementations of mint/validate/rent ship Day 4-5. For now the
 subcommands print a not-yet-implemented notice and exit cleanly so that
 Section 1 acceptance (``lockstep --help`` lists the three subcommands)
 can pass without dragging in substrate wiring.

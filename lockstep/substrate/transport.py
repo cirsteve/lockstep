@@ -23,13 +23,23 @@ class TransportAdapter(Protocol):
     def peer_id(self) -> str: ...
 
 
+class TransportError(RuntimeError):
+    """Raised when transport setup fails (e.g. duplicate peer_id)."""
+
+
 class MockTransportAdapter:
     """Process-local pub/sub. Construct multiple instances to simulate peers."""
 
     _PEERS: dict[str, MockTransportAdapter] = {}
 
     def __init__(self, peer_id: str | None = None) -> None:
-        self._peer_id = peer_id or "peer_" + secrets.token_hex(4)
+        chosen = peer_id or "peer_" + secrets.token_hex(4)
+        if chosen in MockTransportAdapter._PEERS:
+            raise TransportError(
+                f"peer_id {chosen!r} already registered; "
+                "use MockTransportAdapter.reset() between tests"
+            )
+        self._peer_id = chosen
         self._handlers: list[Handler] = []
         MockTransportAdapter._PEERS[self._peer_id] = self
 

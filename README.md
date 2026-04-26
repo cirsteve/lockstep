@@ -253,19 +253,18 @@ lockstep/
 ├── pyproject.toml
 ├── README.md
 ├── CLAUDE.md                       permanent context, reloaded each session
-├── ARCHITECTURE.md
 ├── lockstep/
 │   ├── substrate/                  TEE attestation, 0G Storage, 0G Chain, AXL transport, payment
 │   ├── evaluation/                 Evaluator + Evaluation interfaces, Receipt schema
 │   ├── domains/
 │   │   ├── coin_flip/              toy domain — abstraction proof for non-trading workloads
 │   │   └── trading/                directional and market-neutral instantiations
-│   ├── verification/               validator node, AXL gossip, challenge submission
-│   ├── execution/                  KeeperHub MCP integration, x402 payment hooks
-│   └── examples/                   reference strategies, demo flow scripts
-├── contracts/                      ERC-7857 reference impl + bounty escrow spec
+│   ├── verification/   (planned)   validator node, AXL gossip, challenge submission
+│   └── execution/      (planned)   KeeperHub MCP integration, x402 payment hooks
+├── contracts/          (planned)   ERC-7857 reference impl + bounty escrow spec
+├── examples/                       reference strategies, demo flow scripts
 ├── tests/                          mirrors the lockstep/ tree
-└── docs/                           trust model, roadmap, demand-side spec, FAQ, submissions
+└── docs/                (planned)  trust model, roadmap, demand-side spec, FAQ, submissions
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the detailed component breakdown.

@@ -1,11 +1,12 @@
 """Shared test fixtures.
 
 Three pieces:
-- ``clear_registry`` (autouse): resets the in-memory Evaluator dict
-  between tests so registrations from one test don't leak into another.
+- ``evaluator_registry_baseline`` (autouse): snapshots the registry once
+  per session after Layer 3 imports and restores that baseline between
+  tests. This preserves the module-import-time registrations every
+  domain performs, while still cleaning up any test-local registrations.
 - ``fake_attestation_factory``: builds a fake EnclaveAttestation with the
-  right pubkey shape so receipt.build() accepts it. Real cryptography
-  arrives via the substrate.attestation Mock in Section 2.
+  right pubkey shape so receipt.build() accepts it.
 - ``fake_dataset_commitment_factory``: builds a fake DatasetCommitment
   with placeholder Merkle roots, parameterized by domain.
 """
@@ -20,18 +21,35 @@ from lockstep import (
     Bytes32Hex,
     DatasetCommitment,
     EnclaveAttestation,
+    restore_registry,
+    snapshot_registry,
 )
-from lockstep import (
-    clear_registry as _clear_registry,
-)
+
+
+def _force_layer3_imports() -> None:
+    """Trigger domain module imports so register_evaluator fires.
+
+    Module-import-time registration only happens once per process. Tests
+    that need the domain evaluators in the registry rely on these
+    imports having already run.
+    """
+    import lockstep.domains.coin_flip.evaluation  # noqa: F401
+    import lockstep.domains.trading.directional.evaluation  # noqa: F401
+    import lockstep.domains.trading.market_neutral.evaluation  # noqa: F401
+
+
+@pytest.fixture(autouse=True, scope="session")
+def _registry_session_baseline() -> dict:
+    """Force domain imports once, then capture the post-import registry."""
+    _force_layer3_imports()
+    return snapshot_registry()
 
 
 @pytest.fixture(autouse=True)
-def clear_registry():
-    """Reset the in-memory evaluator registry before and after each test."""
-    _clear_registry()
+def evaluator_registry_baseline(_registry_session_baseline: dict) -> None:
+    """Restore the post-import registry after each test runs."""
     yield
-    _clear_registry()
+    restore_registry(_registry_session_baseline)
 
 
 @pytest.fixture

@@ -15,7 +15,7 @@ for tests, and is the right behavioral shape for the validator network.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
@@ -36,7 +36,6 @@ from lockstep.evaluation.receipt import (
     EnclaveAttestation,
     Receipt,
     ReceiptKind,
-    derive_receipt_id,
 )
 
 
@@ -116,8 +115,6 @@ class MockAttestationAdapter:
             return True
         except (InvalidSignature, ValueError):
             return False
-        except Exception:
-            return False
 
     def produce_receipt(
         self,
@@ -148,31 +145,26 @@ class MockAttestationAdapter:
         if created_at is None:
             created_at = datetime.now(UTC)
 
-        # Step 1: compute the canonical payload using the same body shape
-        # Receipt.build() produces. Done by building a dummy Receipt? No —
-        # Receipt.build wants the attestation already. We mirror the body
-        # construction here so the signature covers exactly the bytes
-        # Receipt.canonical_signing_payload() will produce.
-        body: dict[str, Any] = {
-            "kind": kind.value,
-            "previous_receipt_id": previous_receipt_id,
-            "evaluator_id": evaluator.evaluator_id,
-            "domain": evaluator.domain_name,
-            "problem_id": problem_id,
-            "solution_plaintext_commitment": solution_plaintext_commitment,
-            "solution_bundle_hash": solution_bundle_hash,
-            "dataset_commitment": dataset_commitment,
-            "grader_version": grader_version,
-            "public_score_vector": grader_result.public_score_vector,
-            "full_score_vector": grader_result.full_score_vector,
-            "metadata": grader_result.metadata,
-            "created_at": created_at.astimezone(UTC).isoformat(),
-        }
-        from lockstep.evaluation.canonical import canonical_json_bytes
+        # One source of truth for the canonical signing bytes — the same
+        # helper Receipt.build uses internally. Sign these exact bytes,
+        # then hand off to Receipt.build which derives receipt_id from
+        # the identical helper. No body duplication, no drift.
+        payload = Receipt.signing_payload_for_fields(
+            kind=kind,
+            previous_receipt_id=previous_receipt_id,
+            evaluator_id=evaluator.evaluator_id,
+            domain=evaluator.domain_name,
+            problem_id=problem_id,
+            solution_plaintext_commitment=solution_plaintext_commitment,
+            solution_bundle_hash=solution_bundle_hash,
+            dataset_commitment=dataset_commitment,
+            grader_version=grader_version,
+            public_score_vector=grader_result.public_score_vector,
+            full_score_vector=grader_result.full_score_vector,
+            metadata=grader_result.metadata,
+            created_at=created_at,
+        )
 
-        payload = canonical_json_bytes(body)
-
-        # Step 2: sign
         attestation = self.sign_canonical_payload(payload, private_key)
         if attestation.pubkey != pubkey.lower():
             raise AttestationError(
@@ -180,9 +172,7 @@ class MockAttestationAdapter:
                 f"{attestation.pubkey}"
             )
 
-        # Step 3: assemble Receipt — Receipt.build derives the same id from
-        # the same body, so we let it do that work rather than duplicating.
-        receipt = Receipt.build(
+        return Receipt.build(
             kind=kind,
             evaluator_id=evaluator.evaluator_id,
             domain=evaluator.domain_name,
@@ -198,12 +188,3 @@ class MockAttestationAdapter:
             created_at=created_at,
             enclave=attestation,
         )
-
-        # Sanity: receipt_id should equal sha256 of the payload we signed
-        derived = derive_receipt_id(payload)
-        if receipt.receipt_id != derived:
-            raise AttestationError(
-                "receipt_id does not match the payload that was signed; "
-                "canonical-form drift between adapter and Receipt schema"
-            )
-        return receipt

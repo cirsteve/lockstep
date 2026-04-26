@@ -5,23 +5,28 @@ on its key-value primitive; receipts and dataset payloads ride on its
 Log primitive. The Protocol below is what the substrate code calls; the
 0G adapter and the Mock both satisfy it.
 
-The Mock here is a process-local dict with optional disk persistence.
-Sealed private payloads are gated on a set of attestation pubkeys
-registered as authorized — the mock doesn't actually re-encrypt with the
-attestation key; it just refuses to hand the bytes over to anyone outside
-the allowed set. The cryptographic shape is correct; the substitution
-point in production is a real ERC-7857 oracle re-encryption ceremony.
+The Mock is a process-local dict. Sealed private payloads are gated on a
+set of attestation pubkeys registered as authorized — the mock doesn't
+actually re-encrypt with the attestation key; it just refuses to hand
+the bytes to anyone outside the allowed set. The cryptographic shape is
+correct; the substitution point in production is a real ERC-7857 oracle
+re-encryption ceremony.
+
+Integrity verification uses ``sha256(payload_bytes)``. Producers commit
+to the bytes they upload, the storage adapter recomputes the same hash
+on download, and the trading domains' ``commitment_roots()`` helper
+emits the same hash by serializing through ``canonical_json_bytes`` —
+so storage and domain code agree on what a "root" means.
 """
 
 from __future__ import annotations
 
+import hashlib
 from typing import Protocol
 
 from lockstep.evaluation.canonical import Bytes32Hex
 from lockstep.evaluation.receipt import Receipt
 from lockstep.evaluation.solution import DatasetCommitment, EncryptedSolution
-
-from ._merkle import merkle_root
 
 
 class StorageError(RuntimeError):
@@ -62,25 +67,19 @@ class StorageAdapter(Protocol):
 class MockStorageAdapter:
     """In-memory storage adapter suitable for tests and the local demo.
 
-    Datasets are stored split: ``public_payload`` and ``private_payload``
-    keyed by Merkle root. ``load_dataset_full`` requires the caller's
-    ``attestation_pubkey`` to be in the allowed set, mocking the real
-    re-encryption gate. ``load_dataset_public`` is open.
-
-    Receipts and encrypted solutions ride a flat URI dict.
+    Datasets are stored split into public and private payloads keyed by
+    storage URI. Loads recompute ``sha256(payload_bytes)`` and compare
+    against the commitment so tampering with bytes or commitment is
+    detected. ``load_dataset_full`` requires ``attestation_pubkey`` to
+    be in the allowed set, mocking the real re-encryption gate.
     """
 
     def __init__(self) -> None:
         self._objects: dict[str, bytes] = {}
         self._receipts: dict[str, Receipt] = {}
-        # Datasets keyed by storage_uri (the URI is part of the commitment).
-        # Loads recompute the Merkle root from bytes and compare against the
-        # commitment the caller passed in — so tampering with either bytes
-        # or commitment is detected.
         self._dataset_public: dict[str, bytes] = {}
         self._dataset_private: dict[str, bytes] = {}
         self._allowed_attestations: set[Bytes32Hex] = set()
-        self._counter = 0
 
     def authorize_attestation(self, pubkey: Bytes32Hex) -> None:
         """Register an attestation pubkey as authorized for full-dataset reads."""
@@ -89,22 +88,15 @@ class MockStorageAdapter:
     def upload_encrypted_solution(
         self, bundle: bytes, recipient_pubkey: Bytes32Hex
     ) -> EncryptedSolution:
-        import hashlib
-
-        bundle_hash = "0x" + hashlib.sha256(bundle).hexdigest()
-        plaintext_commitment = "0x" + hashlib.sha256(b"plaintext-of:" + bundle).hexdigest()
-        # NOTE: the mock does not actually perform the encryption ceremony
-        # here. The plaintext_commitment field is meaningful only when the
-        # caller already knows the cleartext (e.g. the producer building
-        # the bundle). Tests that need a true commitment thread it in via
-        # the EncryptionAdapter (see substrate.encryption).
-        uri = f"mock://solution/{bundle_hash}"
-        self._objects[uri] = bundle
-        return EncryptedSolution(
-            plaintext_commitment=plaintext_commitment,
-            bundle_hash=bundle_hash,
-            storage_uri=uri,
-            recipient_pubkey=recipient_pubkey,
+        # The mock cannot derive a real plaintext_commitment from
+        # ciphertext alone — the commitment is the hash of cleartext.
+        # Callers that have the cleartext should use ``upload_object``
+        # and pass the commitment explicitly. The real 0G adapter does
+        # not need this either: producers always know the cleartext.
+        raise NotImplementedError(
+            "MockStorageAdapter cannot fabricate plaintext_commitment from "
+            "ciphertext. Use upload_object(..., plaintext_commitment=...) "
+            "after computing the commitment via the encryption adapter."
         )
 
     def upload_object(
@@ -116,13 +108,11 @@ class MockStorageAdapter:
     ) -> EncryptedSolution:
         """Upload an already-encrypted bundle whose plaintext commitment is known.
 
-        Distinct from ``upload_encrypted_solution`` because the mock can't
-        derive a real plaintext_commitment from the ciphertext alone. The
-        encryption adapter computes the commitment from cleartext and
-        passes it in here.
+        Distinct from the upload_encrypted_solution Protocol method
+        because the mock can't derive a real plaintext_commitment from
+        the ciphertext alone. The encryption adapter computes the
+        commitment from cleartext and passes it in here.
         """
-        import hashlib
-
         bundle_hash = "0x" + hashlib.sha256(bundle).hexdigest()
         uri = f"mock://solution/{bundle_hash}"
         self._objects[uri] = bundle
@@ -161,10 +151,9 @@ class MockStorageAdapter:
         payload = self._dataset_public.get(commitment.storage_uri)
         if payload is None:
             raise StorageError(f"no public payload for commitment uri {commitment.storage_uri}")
-        leaves = _chunked(payload, 64)
-        if merkle_root(leaves) != commitment.public_root:
+        if _payload_root(payload) != commitment.public_root:
             raise StorageError(
-                f"public payload Merkle root mismatch for commitment {commitment.storage_uri}"
+                f"public payload root mismatch for commitment {commitment.storage_uri}"
             )
         return payload
 
@@ -180,15 +169,17 @@ class MockStorageAdapter:
         private_payload = self._dataset_private.get(commitment.storage_uri)
         if private_payload is None:
             raise StorageError(f"no private payload for commitment uri {commitment.storage_uri}")
-        leaves = _chunked(private_payload, 64)
-        if merkle_root(leaves) != commitment.private_root:
+        if _payload_root(private_payload) != commitment.private_root:
             raise StorageError(
-                f"private payload Merkle root mismatch for commitment {commitment.storage_uri}"
+                f"private payload root mismatch for commitment {commitment.storage_uri}"
             )
         return public_payload + private_payload
 
 
-def _chunked(payload: bytes, size: int) -> list[bytes]:
-    if not payload:
-        return [b""]
-    return [payload[i : i + size] for i in range(0, len(payload), size)]
+def _payload_root(payload: bytes) -> str:
+    """sha256 of payload bytes as 0x-prefixed hex.
+
+    Same shape the trading-domain ``commitment_roots`` helpers emit when
+    the producer feeds them ``canonical_json_bytes(list(bars))``.
+    """
+    return "0x" + hashlib.sha256(payload).hexdigest()

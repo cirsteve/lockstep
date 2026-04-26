@@ -93,10 +93,14 @@ def _sharpe(returns: list[Decimal]) -> Decimal:
 
 
 def _max_drawdown(cumulative: list[Decimal]) -> Decimal:
-    """Peak-to-trough drawdown on a cumulative-P&L series. Non-negative magnitude."""
+    """Peak-to-trough drawdown on a cumulative-P&L series. Non-negative magnitude.
+
+    Peak is anchored at zero (the implicit pre-trading baseline) so a
+    strategy that opens with a loss has its initial drawdown counted.
+    """
     if not cumulative:
         return Decimal(0)
-    peak = cumulative[0]
+    peak = Decimal(0)
     worst = Decimal(0)
     for v in cumulative:
         if v > peak:

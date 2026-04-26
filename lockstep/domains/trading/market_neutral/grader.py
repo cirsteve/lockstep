@@ -55,6 +55,17 @@ _SIG_FIGS = 12
 
 _DIRECTION_SIGN = {"long": Decimal(1), "short": Decimal(-1), "flat": Decimal(0)}
 
+# Defensive: the score-vector keys below hardcode regime names; if the
+# dataset's VALID_REGIMES drifts (rename, addition, removal), zero-out
+# bugs would silently land in graded receipts. Fail at import time
+# instead so a coordinated grader-version bump is forced.
+_EXPECTED_REGIMES = ("funding_positive", "funding_negative", "funding_neutral")
+if set(_EXPECTED_REGIMES) != set(VALID_REGIMES):
+    raise RuntimeError(
+        f"grader regime keys {_EXPECTED_REGIMES} drifted from "
+        f"dataset.VALID_REGIMES {VALID_REGIMES}; bump grader version when changing"
+    )
+
 
 def _to_decimal(x: float | int | Decimal) -> Decimal:
     if isinstance(x, Decimal):

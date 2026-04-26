@@ -113,7 +113,7 @@ class EncryptedSolution(BaseModel):
     bundle_hash: Bytes32Hex
     storage_uri: str
     recipient_pubkey: Bytes32Hex
-    encryption_scheme: str = "x25519-xchacha20poly1305-mock"
+    encryption_scheme: str = "x25519-chacha20poly1305-mock"
 
 
 class DatasetCommitment(BaseModel):

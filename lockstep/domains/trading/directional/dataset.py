@@ -52,13 +52,19 @@ class DirectionalDataset(DatasetPayload):
         before hashing — Pydantic-loaded values that come back through JSON
         round-trips would otherwise produce different byte sequences in
         edge cases (key order, float rounding inside dict values).
+
+        On a public-only view (``private_bars == ()``) the private-root
+        check is skipped: the original commitment.private_root reflects
+        the producer's full sealed payload, which a public-tier validator
+        does not have access to. Skipping keeps integrity checks
+        meaningful for both the full and public-view tiers without
+        requiring the validator to fabricate a private root.
         """
-        public_root = _hash_bars(self.public_bars)
-        if public_root != self.commitment.public_root:
+        if _hash_bars(self.public_bars) != self.commitment.public_root:
             return False
-        private_root = _hash_bars(self.private_bars)
-        if private_root != self.commitment.private_root:
-            return False
+        if self.has_private_data():
+            if _hash_bars(self.private_bars) != self.commitment.private_root:
+                return False
         return True
 
     def public_view(self) -> DirectionalDataset:

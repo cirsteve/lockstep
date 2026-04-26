@@ -26,8 +26,10 @@ def directional_dataset_factory() -> Callable[..., object]:
 
 @pytest.fixture
 def market_neutral_dataset_factory() -> Callable[..., object]:
-    def _build(n_public: int = 60, n_private: int = 20):
-        return build_market_neutral_dataset(n_public, n_private)
+    def _build(n_public: int = 60, n_private: int = 20, start_offset: int = 0):
+        return build_market_neutral_dataset(
+            n_public, n_private, start_offset=start_offset
+        )
 
     return _build
 

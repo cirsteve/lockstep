@@ -23,6 +23,11 @@ def test_public_view_strips_private_data(market_neutral_dataset_factory):
     assert pv.private_bars == ()
 
 
+def test_public_view_verify_integrity_passes(market_neutral_dataset_factory):
+    pv = market_neutral_dataset_factory().public_view()
+    assert pv.verify_integrity() is True
+
+
 def test_funding_regime_coverage(market_neutral_dataset_factory):
     ds = market_neutral_dataset_factory(n_public=60, n_private=20)
     regimes = {b["regime"] for b in ds.all_bars()}

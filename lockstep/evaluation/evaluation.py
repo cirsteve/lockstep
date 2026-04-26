@@ -10,7 +10,7 @@ Grader with everything else the domain needs: solution and dataset
 types, ranking logic, solver interface specification.
 
 The substrate orchestrates Evaluations without knowing their concrete
-types. Domain implementations live in domains/<n>/evaluation.py.
+types. Domain implementations live in domains/<name>/evaluation.py.
 """
 
 from __future__ import annotations

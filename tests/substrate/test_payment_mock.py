@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from lockstep.substrate.payment import MockPaymentAdapter
+import pytest
+
+from lockstep.substrate.payment import MockPaymentAdapter, PaymentError
 
 
 def _adapter() -> MockPaymentAdapter:
@@ -63,3 +65,73 @@ def test_replaying_quote_produces_distinct_receipts():
     r1 = adapter.pay(q1, payer_private_key=b"payer-secret")
     r2 = adapter.pay(q2, payer_private_key=b"payer-secret")
     assert r1.proof != r2.proof
+
+
+def test_paying_same_quote_twice_raises_replay_error():
+    adapter = _adapter()
+    quote = adapter.quote(token_id=1, executor="0x" + "ee" * 20)
+    adapter.pay(quote, payer_private_key=b"payer-secret")
+    with pytest.raises(PaymentError, match="already settled"):
+        adapter.pay(quote, payer_private_key=b"payer-secret")
+
+
+def test_verify_payment_with_mismatched_token_id_is_false():
+    adapter = _adapter()
+    quote = adapter.quote(token_id=1, executor="0x" + "ee" * 20)
+    receipt = adapter.pay(quote, payer_private_key=b"payer-secret")
+    assert (
+        adapter.verify_payment(
+            receipt,
+            expected_recipient="0x" + "ab" * 20,
+            expected_amount=1_500_000,
+            expected_token_id=999,
+        )
+        is False
+    )
+
+
+def test_verify_payment_with_mismatched_executor_is_false():
+    adapter = _adapter()
+    quote = adapter.quote(token_id=1, executor="0x" + "ee" * 20)
+    receipt = adapter.pay(quote, payer_private_key=b"payer-secret")
+    assert (
+        adapter.verify_payment(
+            receipt,
+            expected_recipient="0x" + "ab" * 20,
+            expected_amount=1_500_000,
+            expected_executor="0x" + "ff" * 20,
+        )
+        is False
+    )
+
+
+def test_verify_payment_with_mismatched_currency_is_false():
+    adapter = _adapter()
+    quote = adapter.quote(token_id=1, executor="0x" + "ee" * 20)
+    receipt = adapter.pay(quote, payer_private_key=b"payer-secret")
+    assert (
+        adapter.verify_payment(
+            receipt,
+            expected_recipient="0x" + "ab" * 20,
+            expected_amount=1_500_000,
+            expected_currency="ETH",
+        )
+        is False
+    )
+
+
+def test_verify_payment_with_full_context_binding_passes():
+    adapter = _adapter()
+    quote = adapter.quote(token_id=1, executor="0x" + "ee" * 20)
+    receipt = adapter.pay(quote, payer_private_key=b"payer-secret")
+    assert (
+        adapter.verify_payment(
+            receipt,
+            expected_recipient="0x" + "ab" * 20,
+            expected_amount=1_500_000,
+            expected_token_id=1,
+            expected_executor="0x" + "ee" * 20,
+            expected_currency="mock-USDC",
+        )
+        is True
+    )

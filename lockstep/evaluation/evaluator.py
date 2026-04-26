@@ -20,7 +20,7 @@ import hashlib
 import json
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .canonical import Bytes32Hex, canonical_json_bytes
 
@@ -122,6 +122,24 @@ class Evaluator(BaseModel):
         if not v:
             raise ValueError("accepted_grader_versions must contain at least one grader hash")
         return v
+
+    @model_validator(mode="after")
+    def _verify_evaluator_id(self) -> Evaluator:
+        """Reject manually-supplied evaluator_ids that don't match canonical bytes.
+
+        Mirrors Receipt._verify_receipt_id. Bypassing Evaluator.build()
+        and constructing Evaluator(evaluator_id="0x...", ...) directly
+        with a wrong id would otherwise succeed silently and let
+        downstream receipts reference a bogus content-addressed
+        identifier.
+        """
+        expected = "0x" + hashlib.sha256(self.canonical_bytes()).hexdigest()
+        if self.evaluator_id != expected:
+            raise ValueError(
+                f"evaluator_id mismatch: stated={self.evaluator_id} derived={expected}. "
+                "Use Evaluator.build(...) to construct evaluators with derived IDs."
+            )
+        return self
 
     def canonical_body(self) -> dict[str, Any]:
         """Serializable body of the Evaluator, excluding evaluator_id."""
@@ -239,3 +257,14 @@ def list_evaluators() -> list[Evaluator]:
 def clear_registry() -> None:
     """Test helper. Production code should not call this."""
     _REGISTRY.clear()
+
+
+def snapshot_registry() -> dict[Bytes32Hex, Evaluator]:
+    """Return a shallow copy of the current registry — for snapshot/restore."""
+    return dict(_REGISTRY)
+
+
+def restore_registry(snapshot: dict[Bytes32Hex, Evaluator]) -> None:
+    """Replace the registry contents with a previously-captured snapshot."""
+    _REGISTRY.clear()
+    _REGISTRY.update(snapshot)

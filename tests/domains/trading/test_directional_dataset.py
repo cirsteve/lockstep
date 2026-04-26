@@ -24,6 +24,12 @@ def test_public_view_strips_private_data(directional_dataset_factory):
     assert pv.private_bars == ()
 
 
+def test_public_view_verify_integrity_passes(directional_dataset_factory):
+    """A public-tier validator must not fail integrity on a stripped view."""
+    pv = directional_dataset_factory().public_view()
+    assert pv.verify_integrity() is True
+
+
 def test_regime_label_coverage(directional_dataset_factory):
     ds = directional_dataset_factory(n_public=40, n_private=10)
     all_bars = ds.all_bars()

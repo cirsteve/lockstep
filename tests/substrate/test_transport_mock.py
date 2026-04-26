@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lockstep.substrate.transport import MockTransportAdapter
+from lockstep.substrate.transport import MockTransportAdapter, TransportError
 
 
 @pytest.fixture(autouse=True)
@@ -34,3 +34,9 @@ def test_peer_id_is_stable_across_calls():
     pid = auto.peer_id()
     assert pid == auto.peer_id()
     assert pid.startswith("peer_")
+
+
+def test_duplicate_peer_id_raises():
+    MockTransportAdapter("conflict")
+    with pytest.raises(TransportError, match="already registered"):
+        MockTransportAdapter("conflict")

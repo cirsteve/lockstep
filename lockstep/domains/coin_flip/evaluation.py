@@ -39,56 +39,59 @@ _OUTPUT_SCHEMA = {
 }
 
 
+EVALUATOR = Evaluator.build(
+    domain_name="coin_flip",
+    domain_version="v1",
+    solver_input_schema=_INPUT_SCHEMA,
+    solver_output_schema=_OUTPUT_SCHEMA,
+    invocation_model="batch",
+    accepted_grader_versions=[CoinFlipGrader.version()],
+    dataset_schema_version="v1",
+    holdout_policy=HoldoutPolicy(
+        public_fraction=0.5,
+        rotation_cadence_days=None,
+        rotation_governance="marketplace_admin",
+    ),
+    score_dimensions=[
+        ScoreDimension(
+            key="accuracy",
+            description="Fraction of correct predictions over all examples.",
+            unit="ratio",
+            higher_is_better=True,
+            expected_range=(0.0, 1.0),
+        ),
+        ScoreDimension(
+            key="n_examples",
+            description=(
+                "Number of examples the score was computed over. "
+                "Informational; not used for ranking."
+            ),
+            unit="count",
+            higher_is_better=True,
+        ),
+    ],
+    rank_dimension="accuracy",
+    dispute_policy=DisputePolicy(
+        challenge_window_seconds=86_400,
+        minimum_validators_for_consensus=1,
+        resolution_method="replay",
+    ),
+    metadata={
+        "purpose": "Toy domain proving the abstract interfaces hold for non-trading workloads.",
+    },
+)
+register_evaluator(EVALUATOR)
+
+
 class CoinFlipEvaluation(Evaluation[CoinFlipSolution, CoinFlipDataset]):
     """Concrete Evaluation for the coin-flip toy domain."""
-
-    def __init__(self) -> None:
-        self._evaluator = Evaluator.build(
-            domain_name="coin_flip",
-            domain_version="v1",
-            solver_input_schema=_INPUT_SCHEMA,
-            solver_output_schema=_OUTPUT_SCHEMA,
-            invocation_model="batch",
-            accepted_grader_versions=[CoinFlipGrader.version()],
-            dataset_schema_version="v1",
-            holdout_policy=HoldoutPolicy(
-                public_fraction=0.5,
-                rotation_cadence_days=None,
-                rotation_governance="marketplace_admin",
-            ),
-            score_dimensions=[
-                ScoreDimension(
-                    key="accuracy",
-                    description="Fraction of correct predictions over all examples.",
-                    unit="ratio",
-                    higher_is_better=True,
-                    expected_range=(0.0, 1.0),
-                ),
-                ScoreDimension(
-                    key="n_examples",
-                    description="Number of examples the score was computed over.",
-                    unit="count",
-                    higher_is_better=False,
-                ),
-            ],
-            rank_dimension="accuracy",
-            dispute_policy=DisputePolicy(
-                challenge_window_seconds=86_400,
-                minimum_validators_for_consensus=1,
-                resolution_method="replay",
-            ),
-            metadata={
-                "purpose": "Toy domain proving the abstract interfaces hold for non-trading workloads.",
-            },
-        )
-        register_evaluator(self._evaluator)
 
     @property
     def domain(self) -> str:
         return "coin_flip"
 
     def evaluator(self) -> Evaluator:
-        return self._evaluator
+        return EVALUATOR
 
     @property
     def solver_interface(self) -> SolverInterface:

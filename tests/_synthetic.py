@@ -101,13 +101,22 @@ def build_directional_dataset(
 
 
 def build_market_neutral_series(
-    n_public: int = 60, n_private: int = 20
+    n_public: int = 60,
+    n_private: int = 20,
+    start_offset: int = 0,
 ) -> tuple[tuple[dict, ...], tuple[dict, ...]]:
+    """Synthetic funding/spot/perp series.
+
+    ``start_offset`` shifts the regime-block phase so the public/private
+    split lands across multiple regimes rather than entirely in one.
+    Defaults preserve the original deterministic series.
+    """
     bars: list[dict] = []
     spot = 100.0
     total = n_public + n_private
     for i in range(total):
-        block = (i // 10) % 6
+        phase = i + start_offset
+        block = (phase // 10) % 6
         if block in (0, 1):
             rate = 0.001
         elif block in (3, 4):
@@ -117,11 +126,11 @@ def build_market_neutral_series(
         regime = classify_funding_regime(rate)
         spot = spot * 1.0001
         if rate > 0:
-            basis = 0.5 + 0.1 * (i % 3)
+            basis = 0.5 + 0.1 * (phase % 3)
         elif rate < 0:
-            basis = -(0.5 + 0.1 * (i % 3))
+            basis = -(0.5 + 0.1 * (phase % 3))
         else:
-            basis = 0.05 * (1 if i % 2 == 0 else -1)
+            basis = 0.05 * (1 if phase % 2 == 0 else -1)
         perp = spot + basis
         bars.append(
             {
@@ -137,9 +146,13 @@ def build_market_neutral_series(
 
 
 def build_market_neutral_dataset(
-    n_public: int = 60, n_private: int = 20
+    n_public: int = 60,
+    n_private: int = 20,
+    start_offset: int = 0,
 ) -> MarketNeutralDataset:
-    public, private = build_market_neutral_series(n_public, n_private)
+    public, private = build_market_neutral_series(
+        n_public, n_private, start_offset=start_offset
+    )
     pub_root, priv_root, merkle = mn_roots(public, private)
     commitment = DatasetCommitment(
         domain="trading_market_neutral",

@@ -33,6 +33,8 @@ from .evaluation import (
     get_evaluator,
     list_evaluators,
     register_evaluator,
+    restore_registry,
+    snapshot_registry,
 )
 
 __all__ = [
@@ -63,4 +65,6 @@ __all__ = [
     "get_evaluator",
     "list_evaluators",
     "register_evaluator",
+    "restore_registry",
+    "snapshot_registry",
 ]

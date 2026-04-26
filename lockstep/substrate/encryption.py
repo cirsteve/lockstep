@@ -2,9 +2,9 @@
 
 Production binding (Day 3+): the ERC-7857 oracle re-encryption protocol
 binds a recipient's TEE attestation pubkey to a per-bundle symmetric key.
-The mock skips the oracle ceremony and uses x25519 + XChaCha20-Poly1305
-directly: the bundle is real-encrypted, only the key-derivation path is
-shortened.
+The mock skips the oracle ceremony and uses x25519 + ChaCha20-Poly1305
+(12-byte nonce; PyCA's ``cryptography`` does not yet expose XChaCha20):
+the bundle is real-encrypted, only the key-derivation path is shortened.
 
 The shape that matters for the rest of the substrate:
 

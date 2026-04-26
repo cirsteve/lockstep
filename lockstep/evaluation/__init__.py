@@ -21,6 +21,8 @@ from .evaluator import (
     get_evaluator,
     list_evaluators,
     register_evaluator,
+    restore_registry,
+    snapshot_registry,
 )
 from .receipt import (
     EnclaveAttestation,
@@ -66,4 +68,6 @@ __all__ = [
     "get_evaluator",
     "list_evaluators",
     "register_evaluator",
+    "restore_registry",
+    "snapshot_registry",
 ]

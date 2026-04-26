@@ -137,44 +137,44 @@ _SCORE_DIMENSIONS: list[ScoreDimension] = [
 ]
 
 
+EVALUATOR = Evaluator.build(
+    domain_name="trading_market_neutral",
+    domain_version="v1",
+    solver_input_schema=_INPUT_SCHEMA,
+    solver_output_schema=_OUTPUT_SCHEMA,
+    invocation_model="streaming",
+    accepted_grader_versions=[MarketNeutralGrader.version()],
+    dataset_schema_version="v1",
+    holdout_policy=HoldoutPolicy(
+        public_fraction=0.8,
+        rotation_cadence_days=None,
+        rotation_governance="marketplace_admin",
+    ),
+    score_dimensions=_SCORE_DIMENSIONS,
+    rank_dimension="net_market_neutral_pnl",
+    dispute_policy=DisputePolicy(
+        challenge_window_seconds=86_400,
+        minimum_validators_for_consensus=1,
+        resolution_method="replay",
+    ),
+    metadata={
+        "purpose": "Market-neutral funding-rate capture on Hyperliquid + Binance.",
+        "annualization": "hourly bars → sqrt(24*365)",
+        "funding_threshold": "|rate| > 0.0001 per 8hr",
+    },
+)
+register_evaluator(EVALUATOR)
+
+
 class TradingMarketNeutralEvaluation(Evaluation[MarketNeutralSolution, MarketNeutralDataset]):
     """Layer 3 contract for the trading-market-neutral domain."""
-
-    def __init__(self) -> None:
-        self._evaluator = Evaluator.build(
-            domain_name="trading_market_neutral",
-            domain_version="v1",
-            solver_input_schema=_INPUT_SCHEMA,
-            solver_output_schema=_OUTPUT_SCHEMA,
-            invocation_model="streaming",
-            accepted_grader_versions=[MarketNeutralGrader.version()],
-            dataset_schema_version="v1",
-            holdout_policy=HoldoutPolicy(
-                public_fraction=0.8,
-                rotation_cadence_days=None,
-                rotation_governance="marketplace_admin",
-            ),
-            score_dimensions=_SCORE_DIMENSIONS,
-            rank_dimension="net_market_neutral_pnl",
-            dispute_policy=DisputePolicy(
-                challenge_window_seconds=86_400,
-                minimum_validators_for_consensus=1,
-                resolution_method="replay",
-            ),
-            metadata={
-                "purpose": "Market-neutral funding-rate capture on Hyperliquid + Binance.",
-                "annualization": "hourly bars → sqrt(24*365)",
-                "funding_threshold": "|rate| > 0.0001 per 8hr",
-            },
-        )
-        register_evaluator(self._evaluator)
 
     @property
     def domain(self) -> str:
         return "trading_market_neutral"
 
     def evaluator(self) -> Evaluator:
-        return self._evaluator
+        return EVALUATOR
 
     @property
     def solver_interface(self) -> SolverInterface:

@@ -106,6 +106,10 @@ class EnclaveAttestation(BaseModel):
     def _validate_pubkey(cls, v: str) -> str:
         if not (v.startswith("0x") and len(v) == 66):
             raise ValueError("pubkey must be 0x-prefixed 32-byte hex")
+        try:
+            bytes.fromhex(v[2:])
+        except ValueError as exc:
+            raise ValueError("pubkey must be valid hex after 0x prefix") from exc
         return v.lower()
 
 
@@ -197,20 +201,62 @@ class Receipt(BaseModel):
         attestation (the signature *over* this payload). Includes
         everything else.
         """
+        return self.signing_payload_for_fields(
+            kind=self.kind,
+            previous_receipt_id=self.previous_receipt_id,
+            evaluator_id=self.evaluator_id,
+            domain=self.domain,
+            problem_id=self.problem_id,
+            solution_plaintext_commitment=self.solution_plaintext_commitment,
+            solution_bundle_hash=self.solution_bundle_hash,
+            dataset_commitment=self.dataset_commitment,
+            grader_version=self.grader_version,
+            public_score_vector=self.public_score_vector,
+            full_score_vector=self.full_score_vector,
+            metadata=self.metadata,
+            created_at=self.created_at,
+        )
+
+    @classmethod
+    def signing_payload_for_fields(
+        cls,
+        *,
+        kind: ReceiptKind,
+        previous_receipt_id: Bytes32Hex | None,
+        evaluator_id: Bytes32Hex,
+        domain: str,
+        problem_id: Bytes32Hex,
+        solution_plaintext_commitment: Bytes32Hex,
+        solution_bundle_hash: Bytes32Hex,
+        dataset_commitment: Bytes32Hex,
+        grader_version: Bytes32Hex,
+        public_score_vector: dict[str, float],
+        full_score_vector: dict[str, float] | None,
+        metadata: dict[str, Any],
+        created_at: datetime,
+    ) -> bytes:
+        """
+        Single source of truth for the canonical signing payload bytes.
+
+        Both ``Receipt.build`` and adapters that need to sign before
+        construction (see ``substrate.attestation.produce_receipt``) call
+        this so the signed bytes and the bytes ``canonical_signing_payload``
+        returns at verify time can never drift apart.
+        """
         body = {
-            "kind": self.kind.value,
-            "previous_receipt_id": self.previous_receipt_id,
-            "evaluator_id": self.evaluator_id,
-            "domain": self.domain,
-            "problem_id": self.problem_id,
-            "solution_plaintext_commitment": self.solution_plaintext_commitment,
-            "solution_bundle_hash": self.solution_bundle_hash,
-            "dataset_commitment": self.dataset_commitment,
-            "grader_version": self.grader_version,
-            "public_score_vector": self.public_score_vector,
-            "full_score_vector": self.full_score_vector,
-            "metadata": self.metadata,
-            "created_at": self.created_at.astimezone(UTC).isoformat(),
+            "kind": kind.value,
+            "previous_receipt_id": previous_receipt_id,
+            "evaluator_id": evaluator_id,
+            "domain": domain,
+            "problem_id": problem_id,
+            "solution_plaintext_commitment": solution_plaintext_commitment,
+            "solution_bundle_hash": solution_bundle_hash,
+            "dataset_commitment": dataset_commitment,
+            "grader_version": grader_version,
+            "public_score_vector": public_score_vector,
+            "full_score_vector": full_score_vector,
+            "metadata": metadata,
+            "created_at": created_at.astimezone(UTC).isoformat(),
         }
         return canonical_json_bytes(body)
 
@@ -244,22 +290,22 @@ class Receipt(BaseModel):
         if created_at is None:
             created_at = datetime.now(UTC)
 
-        body = {
-            "kind": kind.value,
-            "previous_receipt_id": previous_receipt_id,
-            "evaluator_id": evaluator_id,
-            "domain": domain,
-            "problem_id": problem_id,
-            "solution_plaintext_commitment": solution_plaintext_commitment,
-            "solution_bundle_hash": solution_bundle_hash,
-            "dataset_commitment": dataset_commitment,
-            "grader_version": grader_version,
-            "public_score_vector": public_score_vector,
-            "full_score_vector": full_score_vector,
-            "metadata": metadata or {},
-            "created_at": created_at.astimezone(UTC).isoformat(),
-        }
-        receipt_id = derive_receipt_id(canonical_json_bytes(body))
+        payload = cls.signing_payload_for_fields(
+            kind=kind,
+            previous_receipt_id=previous_receipt_id,
+            evaluator_id=evaluator_id,
+            domain=domain,
+            problem_id=problem_id,
+            solution_plaintext_commitment=solution_plaintext_commitment,
+            solution_bundle_hash=solution_bundle_hash,
+            dataset_commitment=dataset_commitment,
+            grader_version=grader_version,
+            public_score_vector=public_score_vector,
+            full_score_vector=full_score_vector,
+            metadata=metadata or {},
+            created_at=created_at,
+        )
+        receipt_id = derive_receipt_id(payload)
 
         return cls(
             receipt_id=receipt_id,

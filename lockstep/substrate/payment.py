@@ -95,6 +95,7 @@ class MockPaymentAdapter:
         self._currency = currency
         self._validity_ns = validity_seconds * 1_000_000_000
         self._ledger: dict[Bytes32Hex, PaymentReceipt] = {}
+        self._used_nonces: set[str] = set()
 
     def register_owner(self, token_id: int, owner: Address) -> None:
         """Bind a token to its owner so quotes can target the right recipient."""
@@ -117,13 +118,19 @@ class MockPaymentAdapter:
     def pay(self, quote: Quote, payer_private_key: bytes) -> PaymentReceipt:
         if time.time_ns() > quote.expires_at_ns:
             raise PaymentError("quote expired")
+        if quote.nonce in self._used_nonces:
+            raise PaymentError(f"quote nonce {quote.nonce} already settled")
         # Derive a payer address from the private key bytes. The mock
         # treats the first 20 bytes of sha256(private_key) as the address.
         payer_hash = hashlib.sha256(payer_private_key).digest()
         payer_address = "0x" + payer_hash[:20].hex()
+        # Bind the proof to every field of the rental context, not just
+        # (payer, recipient, amount, nonce). This prevents a proof from
+        # being repurposed for the wrong token, executor, or currency.
         proof_seed = (
-            f"{payer_address}:{quote.recipient}:{quote.amount}:{quote.nonce}".encode()
-        )
+            f"{payer_address}:{quote.recipient}:{quote.amount}:{quote.currency}:"
+            f"{quote.token_id}:{quote.executor}:{quote.nonce}"
+        ).encode()
         proof = "0x" + hashlib.sha256(proof_seed).hexdigest()
         receipt = PaymentReceipt(
             quote=quote,
@@ -132,6 +139,7 @@ class MockPaymentAdapter:
             settled_at_ns=time.time_ns(),
         )
         self._ledger[proof] = receipt
+        self._used_nonces.add(quote.nonce)
         return receipt
 
     def verify_payment(
@@ -139,12 +147,29 @@ class MockPaymentAdapter:
         receipt: PaymentReceipt,
         expected_recipient: Address,
         expected_amount: int,
+        *,
+        expected_token_id: int | None = None,
+        expected_executor: Address | None = None,
+        expected_currency: str | None = None,
     ) -> bool:
+        """Verify a settlement receipt is in the ledger and matches expectations.
+
+        ``expected_token_id``, ``expected_executor``, and
+        ``expected_currency`` are optional defense-in-depth checks for
+        callers that have those fields and want to confirm the proof is
+        bound to the right rental context.
+        """
         ledger_entry = self._ledger.get(receipt.proof)
         if ledger_entry is None or ledger_entry != receipt:
             return False
         if receipt.quote.recipient != expected_recipient:
             return False
         if receipt.quote.amount != expected_amount:
+            return False
+        if expected_token_id is not None and receipt.quote.token_id != expected_token_id:
+            return False
+        if expected_executor is not None and receipt.quote.executor != expected_executor:
+            return False
+        if expected_currency is not None and receipt.quote.currency != expected_currency:
             return False
         return True
