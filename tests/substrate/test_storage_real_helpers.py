@@ -159,6 +159,59 @@ def test_with_retry_stops_when_wall_clock_budget_exhausted_before_next_sleep():
     assert clock.sleeps == []  # never slept; budget already gone
 
 
+def test_with_retry_does_not_fire_extra_attempt_when_sleep_consumes_budget():
+    """If the backoff sleep is clamped to ``remaining`` and that consumes
+    the wall-clock budget exactly, _with_retry must NOT fire another
+    attempt afterward — even though we did sleep. This was the original
+    bug: ``sleep(min(delay, remaining))`` followed by an unconditional
+    fn() call could run an attempt past the deadline.
+    """
+    clock = _FakeClock()
+    calls = 0
+
+    def fn() -> None:
+        nonlocal calls
+        calls += 1
+        # First attempt fails immediately, no time consumed.
+        # The sleep before attempt=1 will then exhaust the budget.
+        raise SubstrateError("transient")
+
+    with pytest.raises(SubstrateError, match="transient"):
+        _with_retry(
+            fn,
+            budget=_RetryBudget(
+                base_delay_seconds=1.0,
+                max_delay_seconds=1.0,
+                max_attempts=4,
+                wall_clock_seconds=0.5,  # smaller than the first backoff
+            ),
+            sleep=clock.sleep,
+            monotonic=clock.monotonic,
+        )
+    # Attempt 0 fires, fails. delay_for_attempt(1) = 1.0, but remaining
+    # is only 0.5 — sleep is clamped to 0.5, taking the clock to the
+    # deadline. Attempt 1 must NOT fire. Total calls: exactly 1.
+    assert calls == 1
+    assert clock.sleeps == [0.5]  # the clamped sleep happened
+
+
+def test_retry_budget_rejects_zero_max_attempts():
+    with pytest.raises(ValueError, match="max_attempts"):
+        _RetryBudget(max_attempts=0)
+
+
+def test_retry_budget_rejects_non_positive_wall_clock():
+    with pytest.raises(ValueError, match="wall_clock_seconds"):
+        _RetryBudget(wall_clock_seconds=0.0)
+
+
+def test_retry_budget_rejects_negative_delays():
+    with pytest.raises(ValueError, match="non-negative"):
+        _RetryBudget(base_delay_seconds=-0.1)
+    with pytest.raises(ValueError, match="non-negative"):
+        _RetryBudget(max_delay_seconds=-0.1)
+
+
 def test_log_event_appends_jsonl_and_creates_parent_dir(tmp_path: Path):
     log = tmp_path / "nested" / "substrate-storage.jsonl"
     _log_event(log, {"op": "upload", "bytes": 42, "status": "ok"})

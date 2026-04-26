@@ -57,6 +57,23 @@ class _RetryBudget:
     max_attempts: int = 4  # 1 original + up to 3 retries
     wall_clock_seconds: float = 30.0
 
+    def __post_init__(self) -> None:
+        # Construction-time validation. With these guarantees, _with_retry
+        # is provably entered at least once, so its "no attempt completed"
+        # fallback is unreachable by construction.
+        if self.max_attempts < 1:
+            raise ValueError(
+                f"max_attempts must be >= 1, got {self.max_attempts}"
+            )
+        if self.wall_clock_seconds <= 0:
+            raise ValueError(
+                f"wall_clock_seconds must be > 0, got {self.wall_clock_seconds}"
+            )
+        if self.base_delay_seconds < 0 or self.max_delay_seconds < 0:
+            raise ValueError(
+                "base_delay_seconds and max_delay_seconds must be non-negative"
+            )
+
     def delay_for_attempt(self, attempt_index: int) -> float:
         """Return the sleep before attempt N (0-indexed). Attempt 0 has no delay."""
         if attempt_index <= 0:
@@ -79,6 +96,11 @@ def _with_retry(
     not a transient failure. Non-SubstrateError exceptions also
     propagate without retry.
 
+    The wall-clock budget is checked both before and after each backoff
+    sleep: if the sleep itself consumes the remaining budget (or
+    ``time.sleep`` oversleeps), the next attempt is skipped rather than
+    fired past the deadline.
+
     ``sleep`` and ``monotonic`` are injected so tests can drive the
     retry loop deterministically.
     """
@@ -91,6 +113,11 @@ def _with_retry(
             if remaining <= 0:
                 break
             sleep(min(delay, remaining))
+            # Re-check post-sleep — the sleep may have consumed the
+            # remaining budget (or overslept slightly). Don't fire
+            # another attempt past the deadline.
+            if monotonic() >= deadline:
+                break
         try:
             return fn()
         except TrustViolation:
@@ -99,7 +126,12 @@ def _with_retry(
             last_error = exc
             if monotonic() >= deadline:
                 break
-    raise last_error or SubstrateError("retry budget exhausted with no attempt made")
+    # Unreachable when _RetryBudget construction validation passes
+    # (max_attempts >= 1 guarantees at least one fn() call), but kept
+    # as a typed-non-None guarantee for the raise.
+    raise last_error or SubstrateError(
+        "retry budget exhausted before any attempt completed"
+    )
 
 
 def _log_event(log_path: Path, event: dict[str, Any]) -> None:
