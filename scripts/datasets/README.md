@@ -16,8 +16,12 @@ The canonical-dataset builders here use:
 | File | Used by | Why |
 |---|---|---|
 | `binance/candles_spot/{BTC,ETH,SOL}_1h.parquet` | `build_directional.py` | 1y hourly OHLCV for the directional dataset |
-| `binance/candles_spot/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` | spot prices for basis computation |
-| `hyperliquid/funding_rates/{BTC,ETH}.parquet` | `build_market_neutral.py` | funding-rate series |
+| `binance/candles_spot/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` *(Day 4)* | spot prices for basis computation |
+| `hyperliquid/funding_rates/{BTC,ETH}.parquet` | `build_market_neutral.py` *(Day 4)* | funding-rate series |
+
+> **Note:** `build_market_neutral.py` lands in a Day 4 follow-up PR. Pull
+> the funding-rate parquets now if you want — they're useful for ad-hoc
+> exploration, but no committed builder consumes them yet.
 
 ## Pull from willie
 
@@ -38,6 +42,25 @@ done
 ```
 
 Total transfer is under 2 MB and takes a few seconds.
+
+## Install build-script deps
+
+The builders use `pandas` + `pyarrow` for parquet ingestion. They're
+*not* part of the lockstep runtime — they ship as the `datasets`
+optional extra so the core package install stays light:
+
+```bash
+uv sync --extra datasets
+# or, including dev tools (pytest, ruff, mypy):
+uv sync --all-extras
+```
+
+Then run a builder:
+
+```bash
+uv run python scripts/datasets/build_directional.py
+uv run python scripts/datasets/build_directional.py --strict   # fail on gaps
+```
 
 ## Schemas
 

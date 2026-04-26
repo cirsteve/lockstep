@@ -13,19 +13,24 @@
 ## Cleaning decisions and gap handling
 
 - **Warmup trim:** dropped the first 30 days (720 hours) per asset where the rolling 30-day stats are NaN. Cleaner than carrying a sentinel regime label into downstream grading.
-- **Gap handling:** verified via `pd.read_parquet` + `timestamp.diff() == 3600s` that all three Binance parquets have zero gaps over the source window. No forward-fill needed.
+- **Gap handling:** the script's `_load_one_asset` recomputes `timestamp.diff()` and counts any value that isn't exactly 3,600,000 ms (1 hour). All three Binance parquets reported zero gaps over the source window — no forward-fill needed.
 - **Timestamp normalization:** parquet timestamps are epoch ms; the canonical dataset uses epoch seconds (per the `DirectionalDataset` schema in `domains/trading/directional/dataset.py`).
 
 ## Final regime thresholds and distribution
 
 Methodology (per spec §3.1 step 4):
 
-- **bull:** rolling 30d return > 10% AND realized vol < median
+- **bull:** rolling 30d return > 10% AND rolling 30d vol < its median
 - **bear:** rolling 30d return < -10% OR drawdown > 15% from rolling 30d peak
-- **vol_spike:** realized vol > 1.4× median
+- **vol_spike:** SHORT (7-day) rolling vol > 1.4× the median of the same short series
 - **chop:** everything else
 
-Realized vol = rolling std of hourly log-returns over a 30-day window. Not annualized — the comparison is against the same window's median, so units cancel.
+Two separate volatility series are computed per asset:
+
+1. **30-day rolling vol** (`rolling_30d_vol` in the script) — used only for the bull-filter check (must be below its median).
+2. **7-day rolling vol** (`short_vol`) — used only for vol_spike detection (must exceed 1.4× the median of the SHORT series, not the 30d one).
+
+Decoupling them keeps a slow multi-day pump from dragging the spike threshold up past where actual flash events can clear it. Both are rolling std of hourly log-returns; not annualized because each comparison is against its own series's median, so units cancel.
 
 Distribution across the full labeled window:
 

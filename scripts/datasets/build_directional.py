@@ -72,7 +72,14 @@ THRESHOLD_VOL_SPIKE_MULT = 1.4
 VOL_SPIKE_WINDOW_HOURS = HOURS_PER_DAY * 7  # 7-day window for spike detection
 
 
-def _load_one_asset(asset: str) -> pd.DataFrame:
+def _load_one_asset(asset: str, *, strict: bool = False) -> tuple[pd.DataFrame, int]:
+    """Load one asset's parquet, sort, and check for gaps.
+
+    Returns ``(df, gap_count)`` where ``gap_count`` is the number of
+    missing hourly bars (i.e. rows where ``timestamp.diff()`` jumps by
+    more than 3,600,000 ms). With ``strict=True``, any gap raises
+    ``ValueError`` instead.
+    """
     path = RAW_DIR / f"{asset}_1h.parquet"
     if not path.exists():
         raise FileNotFoundError(
@@ -81,7 +88,16 @@ def _load_one_asset(asset: str) -> pd.DataFrame:
         )
     df = pd.read_parquet(path)
     df = df.sort_values("timestamp").reset_index(drop=True)
-    return df
+    diffs = df["timestamp"].diff().dropna()
+    expected_step_ms = 3_600_000  # 1 hour in milliseconds
+    gap_count = int((diffs != expected_step_ms).sum())
+    if gap_count > 0 and strict:
+        bad = diffs[diffs != expected_step_ms]
+        raise ValueError(
+            f"{asset} parquet has {gap_count} non-hourly gap(s); "
+            f"first offending diff: {int(bad.iloc[0])} ms at index {bad.index[0]}"
+        )
+    return df, gap_count
 
 
 def _label_regimes(df: pd.DataFrame) -> pd.DataFrame:
@@ -172,21 +188,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail (exit 1) if regime distribution violates the 5%%/60%% balance constraint.",
+        help=(
+            "Fail (exit 1) if (a) any input parquet has non-hourly "
+            "timestamp gaps OR (b) regime distribution violates the "
+            "5%%/60%% balance constraint. Default behavior warns instead."
+        ),
     )
     args = parser.parse_args(argv)
 
     print(f"reading {len(ASSETS)} parquets from {RAW_DIR}")
     per_asset: dict[str, list[dict]] = {}
+    per_asset_gaps: dict[str, int] = {}
     for asset in ASSETS:
-        raw = _load_one_asset(asset)
+        raw, gap_count = _load_one_asset(asset, strict=args.strict)
+        per_asset_gaps[asset] = gap_count
+        if gap_count > 0:
+            print(f"WARN: {asset} parquet has {gap_count} non-hourly gap(s)")
         labeled = _label_regimes(raw)
         bars = _to_bar_dicts(labeled, asset)
         per_asset[asset] = bars
         dist = _regime_distribution(bars)
         print(
             f"  {asset}: {len(raw)} raw rows → {len(bars)} labeled "
-            f"(dropped {len(raw) - len(bars)} warmup) "
+            f"(dropped {len(raw) - len(bars)} warmup, {gap_count} gaps) "
             f"regimes: bull={dist['bull']:.1%} bear={dist['bear']:.1%} "
             f"chop={dist['chop']:.1%} vol_spike={dist['vol_spike']:.1%}"
         )
@@ -251,6 +275,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_report(
         per_asset=per_asset,
+        per_asset_gaps=per_asset_gaps,
         all_bars=all_bars,
         public_bars=public_bars,
         private_bars=private_bars,
@@ -264,6 +289,7 @@ def main(argv: list[str] | None = None) -> int:
 def _write_report(
     *,
     per_asset: dict[str, list[dict]],
+    per_asset_gaps: dict[str, int],
     all_bars: list[dict],
     public_bars: list[dict],
     private_bars: list[dict],
@@ -301,11 +327,25 @@ def _write_report(
         "stats are NaN. Cleaner than carrying a sentinel regime label "
         "into downstream grading."
     )
-    lines.append(
-        "- **Gap handling:** verified via `pd.read_parquet` + "
-        "`timestamp.diff() == 3600s` that all three Binance parquets "
-        "have zero gaps over the source window. No forward-fill needed."
-    )
+    total_gaps = sum(per_asset_gaps.values())
+    if total_gaps == 0:
+        lines.append(
+            "- **Gap handling:** the script's `_load_one_asset` recomputes "
+            "`timestamp.diff()` and counts any value that isn't exactly "
+            "3,600,000 ms (1 hour). All three Binance parquets reported "
+            "zero gaps over the source window — no forward-fill needed."
+        )
+    else:
+        per_asset_str = ", ".join(
+            f"{a}={n}" for a, n in per_asset_gaps.items() if n > 0
+        )
+        lines.append(
+            f"- **Gap handling:** the script's `_load_one_asset` detected "
+            f"{total_gaps} non-hourly gap(s) ({per_asset_str}). Bars on either "
+            "side were retained without interpolation; downstream rolling "
+            "stats around the gap may be biased. Re-run with `--strict` to "
+            "fail on gaps instead of warning."
+        )
     lines.append("- **Timestamp normalization:** parquet timestamps are epoch ms; "
                  "the canonical dataset uses epoch seconds (per the "
                  "`DirectionalDataset` schema in `domains/trading/directional/dataset.py`).")
@@ -316,15 +356,29 @@ def _write_report(
     lines.append("Methodology (per spec §3.1 step 4):")
     lines.append("")
     lines.append(f"- **bull:** rolling 30d return > {THRESHOLD_BULL_RETURN:.0%} "
-                 "AND realized vol < median")
+                 "AND rolling 30d vol < its median")
     lines.append(f"- **bear:** rolling 30d return < {THRESHOLD_BEAR_RETURN:.0%} "
                  f"OR drawdown > {abs(THRESHOLD_BEAR_DRAWDOWN):.0%} from rolling 30d peak")
-    lines.append(f"- **vol_spike:** realized vol > {THRESHOLD_VOL_SPIKE_MULT}× median")
+    lines.append(
+        f"- **vol_spike:** SHORT ({VOL_SPIKE_WINDOW_HOURS // HOURS_PER_DAY}-day) "
+        f"rolling vol > {THRESHOLD_VOL_SPIKE_MULT}× the median of the same short series"
+    )
     lines.append("- **chop:** everything else")
     lines.append("")
-    lines.append("Realized vol = rolling std of hourly log-returns over a 30-day window. "
-                 "Not annualized — the comparison is against the same window's median, "
-                 "so units cancel.")
+    lines.append(
+        "Two separate volatility series are computed per asset:\n"
+        f"\n"
+        f"1. **30-day rolling vol** (`rolling_30d_vol` in the script) — used "
+        f"only for the bull-filter check (must be below its median).\n"
+        f"2. **{VOL_SPIKE_WINDOW_HOURS // HOURS_PER_DAY}-day rolling vol** "
+        f"(`short_vol`) — used only for vol_spike detection (must exceed "
+        f"{THRESHOLD_VOL_SPIKE_MULT}× the median of the SHORT series, not the 30d one).\n"
+        f"\n"
+        "Decoupling them keeps a slow multi-day pump from dragging the spike "
+        "threshold up past where actual flash events can clear it. Both are "
+        "rolling std of hourly log-returns; not annualized because each comparison "
+        "is against its own series's median, so units cancel."
+    )
     lines.append("")
     lines.append("Distribution across the full labeled window:")
     lines.append("")
