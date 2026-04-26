@@ -24,14 +24,20 @@ from __future__ import annotations
 import hashlib
 from typing import Protocol
 
-from lockstep.errors import SubstrateError
+from lockstep.errors import SubstrateError, TrustViolation
 from lockstep.evaluation.canonical import Bytes32Hex
 from lockstep.evaluation.receipt import Receipt
 from lockstep.evaluation.solution import DatasetCommitment, EncryptedSolution
 
 
 class StorageError(SubstrateError):
-    """Raised when a storage operation fails (integrity, authorization, missing)."""
+    """Raised when a storage operation fails for non-trust reasons.
+
+    Use for transient or operational failures: missing object, network
+    issue, auth failure. Trust failures (bytes/commitment mismatch,
+    signature invalid, unauthorized pubkey) raise ``TrustViolation``
+    instead — never retry those.
+    """
 
 
 class StorageAdapter(Protocol):
@@ -122,7 +128,17 @@ class MockStorageAdapter:
     def download_encrypted_solution(self, uri: str) -> bytes:
         if uri not in self._objects:
             raise StorageError(f"unknown storage uri: {uri}")
-        return self._objects[uri]
+        bundle = self._objects[uri]
+        # Bundle hash is encoded in the URI on upload; recompute on
+        # download and compare so any in-process tampering with
+        # _objects shows up as a TrustViolation.
+        expected_hash = uri.rsplit("/", 1)[-1]
+        actual_hash = "0x" + hashlib.sha256(bundle).hexdigest()
+        if actual_hash != expected_hash:
+            raise TrustViolation(
+                f"bundle hash mismatch for {uri}: expected {expected_hash}, got {actual_hash}"
+            )
+        return bundle
 
     def upload_receipt(self, receipt: Receipt) -> str:
         uri = f"mock://receipt/{receipt.receipt_id}"
@@ -132,7 +148,14 @@ class MockStorageAdapter:
     def download_receipt(self, uri: str) -> Receipt:
         if uri not in self._receipts:
             raise StorageError(f"unknown receipt uri: {uri}")
-        return self._receipts[uri]
+        receipt = self._receipts[uri]
+        # Verify signature on the way out — a mock that hands back a
+        # tampered receipt would let bugs propagate to validators.
+        if not receipt.enclave.verify_signature(receipt.canonical_signing_payload()):
+            raise TrustViolation(
+                f"receipt signature invalid for {uri} (pubkey {receipt.enclave.pubkey})"
+            )
+        return receipt
 
     def upload_dataset(
         self,
@@ -148,7 +171,7 @@ class MockStorageAdapter:
         if payload is None:
             raise StorageError(f"no public payload for commitment uri {commitment.storage_uri}")
         if _payload_root(payload) != commitment.public_root:
-            raise StorageError(
+            raise TrustViolation(
                 f"public payload root mismatch for commitment {commitment.storage_uri}"
             )
         return payload
@@ -157,7 +180,7 @@ class MockStorageAdapter:
         self, commitment: DatasetCommitment, attestation_pubkey: Bytes32Hex
     ) -> bytes:
         if attestation_pubkey.lower() not in self._allowed_attestations:
-            raise StorageError(
+            raise TrustViolation(
                 f"attestation pubkey {attestation_pubkey} not authorized "
                 "for full dataset access"
             )
@@ -166,7 +189,7 @@ class MockStorageAdapter:
         if private_payload is None:
             raise StorageError(f"no private payload for commitment uri {commitment.storage_uri}")
         if _payload_root(private_payload) != commitment.private_root:
-            raise StorageError(
+            raise TrustViolation(
                 f"private payload root mismatch for commitment {commitment.storage_uri}"
             )
         return public_payload + private_payload

@@ -112,6 +112,28 @@ class EnclaveAttestation(BaseModel):
             raise ValueError("pubkey must be valid hex after 0x prefix") from exc
         return v.lower()
 
+    def verify_signature(self, payload: bytes) -> bool:
+        """Verify ``signature`` was produced by ``pubkey`` over ``payload``.
+
+        Pure ed25519 check — does not validate the attestation chain
+        (that's ``AttestationAdapter.verify_attestation`` for production
+        TEE-vendor verification). Returned bool: True iff valid.
+        Substrate adapters that detect a False here should raise
+        ``lockstep.errors.TrustViolation`` rather than returning a
+        bad receipt to a caller.
+        """
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        try:
+            pub_bytes = bytes.fromhex(self.pubkey[2:])
+            sig_hex = self.signature[2:] if self.signature.startswith("0x") else self.signature
+            sig_bytes = bytes.fromhex(sig_hex)
+            Ed25519PublicKey.from_public_bytes(pub_bytes).verify(sig_bytes, payload)
+            return True
+        except (InvalidSignature, ValueError):
+            return False
+
 
 def derive_receipt_id(payload: bytes) -> Bytes32Hex:
     """
