@@ -18,8 +18,8 @@ from lockstep.errors import SubstrateError, TrustViolation
 from lockstep.substrate.storage_real import (
     RealStorageAdapter,
     _CostTracker,
-    _RetryBudget,
     _log_event,
+    _RetryBudget,
     _with_retry,
 )
 
