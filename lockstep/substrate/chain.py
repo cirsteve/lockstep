@@ -61,6 +61,15 @@ class MockChainAdapter:
         return "0x" + hashlib.sha256(seed).hexdigest()
 
     def register_evaluator_onchain(self, evaluator: Evaluator) -> Bytes32Hex:
+        existing = self._evaluators.get(evaluator.evaluator_id)
+        if existing is not None and existing != evaluator:
+            # evaluator_id is content-addressed, so this should be impossible.
+            # If it ever fires, something has gone wrong with canonical-form
+            # determinism — fail loudly rather than corrupt chain state.
+            raise ChainError(
+                f"evaluator_id collision for {evaluator.evaluator_id} "
+                "with non-equal Evaluator bodies; canonical-form drift?"
+            )
         self._evaluators[evaluator.evaluator_id] = evaluator
         return self._new_tx_hash()
 

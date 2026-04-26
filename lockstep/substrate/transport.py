@@ -52,7 +52,7 @@ class MockTransportAdapter:
     def send(self, peer_id: str, message: bytes) -> None:
         target = MockTransportAdapter._PEERS.get(peer_id)
         if target is None:
-            raise KeyError(f"unknown peer: {peer_id}")
+            raise TransportError(f"unknown peer: {peer_id}")
         for handler in target._handlers:
             handler(self._peer_id, message)
 

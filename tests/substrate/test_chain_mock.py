@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
 from lockstep.evaluation.evaluator import (
     DisputePolicy,
     Evaluator,
@@ -11,7 +13,7 @@ from lockstep.evaluation.evaluator import (
     ScoreDimension,
 )
 from lockstep.evaluation.receipt import EnclaveAttestation, Receipt, ReceiptKind
-from lockstep.substrate.chain import MockChainAdapter
+from lockstep.substrate.chain import ChainError, MockChainAdapter
 
 
 def _evaluator() -> Evaluator:
@@ -66,6 +68,33 @@ def test_register_evaluator_then_read_returns_same_evaluator():
     tx = adapter.register_evaluator_onchain(evaluator)
     assert tx.startswith("0x")
     assert adapter.read_evaluator(evaluator.evaluator_id) == evaluator
+
+
+def test_register_evaluator_idempotent_for_identical_bodies():
+    """Same evaluator id + same body re-registered is a no-op, not an error."""
+    adapter = MockChainAdapter()
+    evaluator = _evaluator()
+    adapter.register_evaluator_onchain(evaluator)
+    # registering the same evaluator again should succeed (content-addressed).
+    adapter.register_evaluator_onchain(evaluator)
+    assert adapter.read_evaluator(evaluator.evaluator_id) == evaluator
+
+
+def test_register_evaluator_rejects_collision_with_different_body():
+    """Synthetic id collision with non-equal bodies must raise ChainError."""
+    adapter = MockChainAdapter()
+    evaluator = _evaluator()
+    adapter.register_evaluator_onchain(evaluator)
+    # Manually fabricate a different Evaluator instance that bypasses
+    # build()'s id derivation by using model_construct (skips validators).
+    # This simulates the impossible-but-defended-against case where two
+    # Evaluators share an id with non-equal bodies.
+    forged = evaluator.model_copy(update={"domain_name": "different_domain"})
+    forged_with_collision = forged.__class__.model_construct(
+        **{**forged.model_dump(), "evaluator_id": evaluator.evaluator_id}
+    )
+    with pytest.raises(ChainError, match="collision"):
+        adapter.register_evaluator_onchain(forged_with_collision)
 
 
 def test_authorize_usage_records_executor_against_token_id():

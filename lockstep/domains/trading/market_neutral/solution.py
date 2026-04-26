@@ -11,10 +11,10 @@ The submitted source string must define a top-level function::
         # returns: {"spot": {"direction": ..., "size": ...},
         #          "perp": {"direction": ..., "size": ...}}
 
-A ``FundingBar`` carries ``timestamp``, ``rate``, ``regime`` (one of
-``"funding_positive"``, ``"funding_negative"``, ``"funding_neutral"``).
-A ``BasisBar`` carries ``timestamp``, ``spot_close``, ``perp_close``,
-and ``basis``.
+A ``FundingBar`` carries ``timestamp``, ``funding_rate``, ``regime``
+(one of ``"funding_positive"``, ``"funding_negative"``,
+``"funding_neutral"``). A ``BasisBar`` carries ``timestamp``,
+``spot_close``, ``perp_close``, and ``basis``.
 
 Each leg's ``size`` is in [0, 1] meaning fraction of notional. The
 grader penalizes net directional exposure (|spot_pos + perp_pos|)

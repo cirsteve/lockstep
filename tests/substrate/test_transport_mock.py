@@ -40,3 +40,9 @@ def test_duplicate_peer_id_raises():
     MockTransportAdapter("conflict")
     with pytest.raises(TransportError, match="already registered"):
         MockTransportAdapter("conflict")
+
+
+def test_send_to_unknown_peer_raises_transport_error():
+    a = MockTransportAdapter("alice")
+    with pytest.raises(TransportError, match="unknown peer"):
+        a.send("nobody", b"into the void")
