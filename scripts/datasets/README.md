@@ -16,23 +16,27 @@ The canonical-dataset builders here use:
 | File | Used by | Why |
 |---|---|---|
 | `binance/candles_spot/{BTC,ETH,SOL}_1h.parquet` | `build_directional.py` | 1y hourly OHLCV for the directional dataset |
-| `binance/candles_spot/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` *(Day 4)* | spot prices for basis computation |
-| `hyperliquid/funding_rates/{BTC,ETH}.parquet` | `build_market_neutral.py` *(Day 4)* | funding-rate series |
-
-> **Note:** `build_market_neutral.py` lands in a Day 4 follow-up PR. Pull
-> the funding-rate parquets now if you want — they're useful for ad-hoc
-> exploration, but no committed builder consumes them yet.
+| `binance/candles_spot/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` | spot prices for basis computation |
+| `hyperliquid/candles_perp/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` | perp prices for basis computation |
+| `hyperliquid/funding_rates/{BTC,ETH}.parquet` | `build_market_neutral.py` | funding-rate series |
 
 ## Pull from willie
 
 From otto (or any machine with `ssh willie` working):
 
 ```bash
-mkdir -p data/raw/binance/candles_spot data/raw/hyperliquid/funding_rates
+mkdir -p data/raw/binance/candles_spot \
+         data/raw/hyperliquid/candles_perp \
+         data/raw/hyperliquid/funding_rates
 
 for sym in BTC_1h ETH_1h SOL_1h; do
   ssh willie "docker exec ta cat /app/data/training/binance/candles_spot/${sym}.parquet" \
     > data/raw/binance/candles_spot/${sym}.parquet
+done
+
+for sym in BTC_1h ETH_1h; do
+  ssh willie "docker exec ta cat /app/data/training/hyperliquid/candles/${sym}.parquet" \
+    > data/raw/hyperliquid/candles_perp/${sym}.parquet
 done
 
 for sym in BTC ETH; do
@@ -41,7 +45,9 @@ for sym in BTC ETH; do
 done
 ```
 
-Total transfer is under 2 MB and takes a few seconds.
+Total transfer is under 2 MB and takes a few seconds. The Hyperliquid
+candles are renamed on the way over (`candles/` → `candles_perp/`) so
+the spot vs. perp distinction is visible in the local layout.
 
 ## Install build-script deps
 
@@ -68,11 +74,19 @@ uv run python scripts/datasets/build_directional.py --strict   # fail on gaps
 `timestamp` (int64 ms), `coin` (str), `open`, `high`, `low`, `close`,
 `volume` (float64).
 
+**Perp candles** (`hyperliquid/candles_perp/*.parquet`):
+identical schema to Binance spot candles. The `close` column is the
+perp price used for basis computation in `build_market_neutral.py`.
+
 **Funding rates** (`hyperliquid/funding_rates/*.parquet`):
 `timestamp` (int64 ms), `coin` (str), `funding_rate`, `premium`
 (float64). Note: Hyperliquid charges funding **hourly**, not every 8h
-like most perps — the build script accounts for this when applying
-the spec's funding-regime thresholds.
+like most perps — the build script accounts for this by resampling
+to 8h windows (sum) before applying the spec's funding-regime
+thresholds. The raw parquet has millisecond-level drift on hourly
+boundaries (e.g. `1704067200151` = top-of-hour + 151 ms);
+`build_market_neutral.py` snaps to the hour before joining against
+spot/perp candles.
 
 ## Refresh
 
