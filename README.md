@@ -85,16 +85,21 @@ A receipt is the canonical artifact of the substrate. It binds together everythi
 
 ```
 Receipt {
-  problem_id: bytes32           // domain + problem instance
-  solution_hash: bytes32        // hash of the encrypted solution bundle
-  dataset_commitment: bytes32   // Merkle root of canonical dataset
-  grader_version: bytes32       // content-addressed grader code
-  score_vector: dict            // domain-defined metrics
-  metadata: dict                // domain-defined additional info
-  enclave_signature: bytes      // TEE attestation
-  enclave_pubkey: bytes         // verifiable against attestation chain
+  problem_id: bytes32                       // domain + problem instance
+  evaluator_id: bytes32                     // content-addressed domain contract
+  solution_plaintext_commitment: bytes32    // identity of the underlying solution
+  solution_bundle_hash: bytes32             // identity of this specific encrypted copy
+  dataset_commitment: bytes32               // Merkle root of canonical dataset
+  grader_version: bytes32                   // content-addressed grader code
+  public_score_vector: dict                 // computable from public data alone
+  full_score_vector: dict                   // computable only with sealed-holdout access
+  metadata: dict                            // domain-defined additional info
+  enclave: EnclaveAttestation               // TEE pubkey + signature + attestation chain
+  receipt_id: bytes32                       // derived hash of the canonical signing payload
 }
 ```
+
+Two hashes for the solution because the same plaintext can be re-encrypted for different consumers without changing the underlying solution's identity; two score vectors because validators without TEE access can verify the public portion while full-tier validators reproduce both. The split is structural, not cosmetic — see `lockstep/evaluation/receipt.py` for the canonical schema.
 
 Receipts are public, indefinitely retrievable, and independently verifiable. They become the unit of reputation in the marketplace — every solver's track record is a sequence of receipts, each cryptographically anchored to specific evaluation conditions.
 
@@ -245,15 +250,21 @@ Documented as architectural sketches, not implementations. See [`docs/roadmap.md
 
 ```
 lockstep/
-├── substrate/          TEE attestation, 0G Storage, 0G Chain, AXL transport
-├── evaluation/         Abstract Evaluation interface, Receipt schema, Grader interface
-├── domains/
-│   └── trading/        Directional and market-neutral evaluation instantiations
-├── verification/       Validator node, AXL gossip, challenge submission
-├── execution/          KeeperHub MCP integration, x402 payment hooks
-├── contracts/          ERC-7857 reference impl + bounty escrow spec
-├── examples/           Reference strategies, demo flow scripts
-└── docs/               Trust model, roadmap, demand-side spec, FAQ, submissions
+├── pyproject.toml
+├── README.md
+├── CLAUDE.md                       permanent context, reloaded each session
+├── lockstep/
+│   ├── substrate/                  TEE attestation, 0G Storage, 0G Chain, AXL transport, payment
+│   ├── evaluation/                 Evaluator + Evaluation interfaces, Receipt schema
+│   ├── domains/
+│   │   ├── coin_flip/              toy domain — abstraction proof for non-trading workloads
+│   │   └── trading/                directional and market-neutral instantiations
+│   ├── verification/   (planned)   validator node, AXL gossip, challenge submission
+│   └── execution/      (planned)   KeeperHub MCP integration, x402 payment hooks
+├── contracts/          (planned)   ERC-7857 reference impl + bounty escrow spec
+├── examples/                       reference strategies, demo flow scripts
+├── tests/                          mirrors the lockstep/ tree
+└── docs/                (planned)  trust model, roadmap, demand-side spec, FAQ, submissions
 ```
 
 See [`docs/architecture.md`](docs/architecture.md) for the detailed component breakdown.
@@ -272,6 +283,6 @@ Apache-2.0. The substrate, the evaluation contract abstraction, and the trading 
 
 ---
 
-## Built on jig
+## Built with jig
 
-Lockstep agents — graders, validators, executors — run on jig, a custom agent orchestration framework. Jig provides the Explorer/Specialist/Refiner agent variants and the orchestration primitives that Lockstep uses to coordinate multi-agent flows across the substrate.
+Lockstep was designed and implemented using jig, a custom multi-agent development framework. The architect/implementer split described in `CLAUDE.md` runs on top of jig's orchestration primitives. The substrate itself has no jig runtime dependency — graders, validators, and executors run as plain Python services against the interfaces in `lockstep/`.
