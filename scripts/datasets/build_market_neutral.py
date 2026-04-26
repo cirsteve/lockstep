@@ -363,7 +363,15 @@ def main(argv: list[str] | None = None) -> int:
         schema_version="v1",
     )
 
-    walk_forward_windows = ((len(public_bars) // 2, len(public_bars)),)
+    # Compute walk-forward indices from the unique-timestamp count, not
+    # from `len(public_bars)`. With single-coin AVAX they're equal, but
+    # if `ASSETS` ever grows to multiple coins, `len(public_bars)`
+    # becomes `n_coins × n_unique_ts_public` and a midpoint-by-bar-count
+    # would straddle coin boundaries inside the window. Indexing by
+    # unique-timestamp count keeps the window meaningful as a
+    # time-bounded slice.
+    n_unique_ts_public = len({b["timestamp"] for b in public_bars})
+    walk_forward_windows = ((n_unique_ts_public // 2, n_unique_ts_public),)
     payload = {
         "commitment": commitment.model_dump(),
         "public_bars": public_bars,

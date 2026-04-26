@@ -104,7 +104,7 @@ band.
 
 Basis (`perp_close - spot_close`) summary:
 
-- median: -2.87 bps (slight contango on Hyperliquid AVAX, perp
+- median: -2.87 bps (slight backwardation on Hyperliquid AVAX, perp
   trading marginally below spot)
 - range: -90.1 / +34.4 bps
 

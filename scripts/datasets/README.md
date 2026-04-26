@@ -16,9 +16,15 @@ The canonical-dataset builders here use:
 | File | Used by | Why |
 |---|---|---|
 | `binance/candles_spot/{BTC,ETH,SOL}_1h.parquet` | `build_directional.py` | 1y hourly OHLCV for the directional dataset |
-| `binance/candles_spot/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` | spot prices for basis computation |
-| `hyperliquid/candles_perp/{BTC,ETH}_1h.parquet` | `build_market_neutral.py` | perp prices for basis computation |
-| `hyperliquid/funding_rates/{BTC,ETH}.parquet` | `build_market_neutral.py` | funding-rate series |
+| `binance/candles_spot/AVAX_1h.parquet` | `build_market_neutral.py` | spot prices for basis computation |
+| `hyperliquid/candles_perp/AVAX_1h.parquet` | `build_market_neutral.py` | perp prices for basis computation |
+| `hyperliquid/funding_rates/AVAX.parquet` | `build_market_neutral.py` | funding-rate series |
+
+The market-neutral builder uses **AVAX** (single coin), not BTC/ETH —
+the 240-day perp window in `ta`'s training store is too narrow for
+either to clear the spec's funding regime balance check. See
+`reports/day-04/dataset-market-neutral.md` for the asset-selection
+rationale.
 
 ## Pull from willie
 
@@ -29,17 +35,17 @@ mkdir -p data/raw/binance/candles_spot \
          data/raw/hyperliquid/candles_perp \
          data/raw/hyperliquid/funding_rates
 
-for sym in BTC_1h ETH_1h SOL_1h; do
+for sym in BTC_1h ETH_1h SOL_1h AVAX_1h; do
   ssh willie "docker exec ta cat /app/data/training/binance/candles_spot/${sym}.parquet" \
     > data/raw/binance/candles_spot/${sym}.parquet
 done
 
-for sym in BTC_1h ETH_1h; do
+for sym in AVAX_1h; do
   ssh willie "docker exec ta cat /app/data/training/hyperliquid/candles/${sym}.parquet" \
     > data/raw/hyperliquid/candles_perp/${sym}.parquet
 done
 
-for sym in BTC ETH; do
+for sym in AVAX; do
   ssh willie "docker exec ta cat /app/data/training/hyperliquid/funding_rates/${sym}.parquet" \
     > data/raw/hyperliquid/funding_rates/${sym}.parquet
 done

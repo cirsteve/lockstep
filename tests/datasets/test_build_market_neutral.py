@@ -63,8 +63,14 @@ def test_market_neutral_builder_is_reproducible() -> None:
         )
 
     # Save the current canonical_dataset.json so a failed test doesn't
-    # leave the working copy in a half-built state.
+    # leave the working copy in a half-built state. Track the
+    # pre-test sha so we can also assert the rebuilt bytes match the
+    # committed copy — catches the "I changed the builder but forgot
+    # to regenerate the JSON" drift case before validators do.
     backup = OUT_JSON.read_bytes() if OUT_JSON.exists() else None
+    backup_sha = (
+        hashlib.sha256(backup).hexdigest() if backup is not None else None
+    )
     try:
         _run_builder()
         first = _sha256(OUT_JSON)
@@ -77,6 +83,19 @@ def test_market_neutral_builder_is_reproducible() -> None:
             "investigate the builder for nondeterminism (unsorted dicts, "
             "iteration order, time.time() leaking into output, etc.)"
         )
+        if backup_sha is not None:
+            assert first == backup_sha, (
+                "rebuilt canonical_dataset.json differs from the committed copy:\n"
+                f"  committed sha256 = {backup_sha}\n"
+                f"  rebuilt   sha256 = {first}\n"
+                "regenerate (uv run python scripts/datasets/build_market_neutral.py) "
+                "and commit, or investigate the diff."
+            )
     finally:
         if backup is not None:
             OUT_JSON.write_bytes(backup)
+        elif OUT_JSON.exists():
+            # Test ran on a clean clone (no prior canonical_dataset.json);
+            # remove the freshly-built file so the working tree matches
+            # the pre-test state.
+            OUT_JSON.unlink()
