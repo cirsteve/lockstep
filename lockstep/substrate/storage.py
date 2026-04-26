@@ -38,10 +38,19 @@ class StorageAdapter(Protocol):
 
     Implementations: ``MockStorageAdapter`` (in-process) for tests and the
     local demo; a real 0G Storage adapter for production.
+
+    ``plaintext_commitment`` is required on upload because storage cannot
+    derive it from ciphertext alone — the encryption adapter computes it
+    from the cleartext payload before encrypting. See ``substrate.encryption``
+    for the helper that produces both halves.
     """
 
     def upload_encrypted_solution(
-        self, bundle: bytes, recipient_pubkey: Bytes32Hex
+        self,
+        bundle: bytes,
+        *,
+        plaintext_commitment: Bytes32Hex,
+        recipient_pubkey: Bytes32Hex,
     ) -> EncryptedSolution: ...
 
     def download_encrypted_solution(self, uri: str) -> bytes: ...
@@ -86,20 +95,6 @@ class MockStorageAdapter:
         self._allowed_attestations.add(pubkey.lower())
 
     def upload_encrypted_solution(
-        self, bundle: bytes, recipient_pubkey: Bytes32Hex
-    ) -> EncryptedSolution:
-        # The mock cannot derive a real plaintext_commitment from
-        # ciphertext alone — the commitment is the hash of cleartext.
-        # Callers that have the cleartext should use ``upload_object``
-        # and pass the commitment explicitly. The real 0G adapter does
-        # not need this either: producers always know the cleartext.
-        raise NotImplementedError(
-            "MockStorageAdapter cannot fabricate plaintext_commitment from "
-            "ciphertext. Use upload_object(..., plaintext_commitment=...) "
-            "after computing the commitment via the encryption adapter."
-        )
-
-    def upload_object(
         self,
         bundle: bytes,
         *,
@@ -108,10 +103,10 @@ class MockStorageAdapter:
     ) -> EncryptedSolution:
         """Upload an already-encrypted bundle whose plaintext commitment is known.
 
-        Distinct from the upload_encrypted_solution Protocol method
-        because the mock can't derive a real plaintext_commitment from
-        the ciphertext alone. The encryption adapter computes the
-        commitment from cleartext and passes it in here.
+        The encryption adapter computes ``plaintext_commitment`` from the
+        cleartext payload before handing it here. Storage cannot derive
+        it from ciphertext alone — that's why the commitment is part of
+        the upload contract and not something storage fabricates.
         """
         bundle_hash = "0x" + hashlib.sha256(bundle).hexdigest()
         uri = f"mock://solution/{bundle_hash}"

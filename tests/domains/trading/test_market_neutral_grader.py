@@ -38,9 +38,8 @@ def test_flat_solution_yields_zero_pnl(
 ):
     ds = market_neutral_dataset_factory()
     sol = MarketNeutralSolution(source=market_neutral_flat_solver_source)
-    grader = MarketNeutralGrader()
-    sv = (grader.grade(sol, ds).full_score_vector
-          or grader.grade(sol, ds).public_score_vector)
+    result = MarketNeutralGrader().grade(sol, ds)
+    sv = result.full_score_vector or result.public_score_vector
     assert sv["net_market_neutral_pnl"] == 0.0
     assert sv["funding_capture_rate"] == 0.0
     assert sv["trade_count"] == 0.0

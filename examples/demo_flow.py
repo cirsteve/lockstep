@@ -250,7 +250,7 @@ def main() -> int:
         plaintext_commitment = encryption.compute_plaintext_commitment(plaintext)
         recipient_pub, _ = generate_keypair()
         ciphertext = encryption.encrypt_for(plaintext, recipient_pubkey=recipient_pub)
-        encrypted_solution = storage.upload_object(
+        encrypted_solution = storage.upload_encrypted_solution(
             ciphertext,
             plaintext_commitment=plaintext_commitment,
             recipient_pubkey=recipient_pub,
@@ -293,7 +293,7 @@ def main() -> int:
         plaintext_commitment = encryption.compute_plaintext_commitment(plaintext)
         recipient_pub, _ = generate_keypair()
         ciphertext = encryption.encrypt_for(plaintext, recipient_pubkey=recipient_pub)
-        encrypted_solution = storage.upload_object(
+        encrypted_solution = storage.upload_encrypted_solution(
             ciphertext,
             plaintext_commitment=plaintext_commitment,
             recipient_pubkey=recipient_pub,

@@ -85,17 +85,17 @@ A receipt is the canonical artifact of the substrate. It binds together everythi
 
 ```
 Receipt {
-  problem_id: bytes32              // domain + problem instance
-  evaluator_id: bytes32            // content-addressed domain contract
-  solution_plaintext_commitment    // identity of the underlying solution
-  solution_bundle_hash             // identity of this specific encrypted copy
-  dataset_commitment: bytes32      // Merkle root of canonical dataset
-  grader_version: bytes32          // content-addressed grader code
-  public_score_vector: dict        // computable from public data alone
-  full_score_vector: dict          // computable only with sealed-holdout access
-  metadata: dict                   // domain-defined additional info
-  enclave: EnclaveAttestation      // TEE pubkey + signature + attestation chain
-  receipt_id: bytes32              // derived hash of the canonical signing payload
+  problem_id: bytes32                       // domain + problem instance
+  evaluator_id: bytes32                     // content-addressed domain contract
+  solution_plaintext_commitment: bytes32    // identity of the underlying solution
+  solution_bundle_hash: bytes32             // identity of this specific encrypted copy
+  dataset_commitment: bytes32               // Merkle root of canonical dataset
+  grader_version: bytes32                   // content-addressed grader code
+  public_score_vector: dict                 // computable from public data alone
+  full_score_vector: dict                   // computable only with sealed-holdout access
+  metadata: dict                            // domain-defined additional info
+  enclave: EnclaveAttestation               // TEE pubkey + signature + attestation chain
+  receipt_id: bytes32                       // derived hash of the canonical signing payload
 }
 ```
 

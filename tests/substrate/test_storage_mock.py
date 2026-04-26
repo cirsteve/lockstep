@@ -27,18 +27,12 @@ def _commitment_for(public: bytes, private: bytes) -> DatasetCommitment:
     )
 
 
-def test_upload_encrypted_solution_raises_for_ciphertext_only_path():
-    adapter = MockStorageAdapter()
-    with pytest.raises(NotImplementedError, match="plaintext_commitment"):
-        adapter.upload_encrypted_solution(b"bytes", recipient_pubkey="0x" + "ab" * 32)
-
-
-def test_upload_object_and_download_roundtrip():
+def test_upload_and_download_roundtrip_carries_plaintext_commitment():
     adapter = MockStorageAdapter()
     bundle = b"encrypted-bundle-bytes" * 8
     pubkey = "0x" + "ab" * 32
     plaintext_commitment = "0x" + "cd" * 32
-    enc_sol = adapter.upload_object(
+    enc_sol = adapter.upload_encrypted_solution(
         bundle,
         plaintext_commitment=plaintext_commitment,
         recipient_pubkey=pubkey,

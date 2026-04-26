@@ -8,7 +8,7 @@ Lockstep is a protocol for verifiable evaluation of private computation. Trading
 
 ## Three-layer architecture
 
-**Layer 1 — Substrate.** Vendor-agnostic primitives: TEE attestation, sealed storage, iNFT mint, validator transport, sealed execution, payment rails. Substrate code lives in `substrate/`.
+**Layer 1 — Substrate.** Vendor-agnostic primitives: TEE attestation, sealed storage, iNFT mint, validator transport, sealed execution, payment rails. Substrate code lives in `lockstep/substrate/`.
 
 **Layer 2 — Evaluation Contract.** Typed interfaces every domain implements. Defined in `evaluation/`. The contract has two distinct artifacts that should never be conflated:
 - `Evaluator` — content-addressable, serializable Pydantic model. Defines *what* a domain is. Receipts reference it by `evaluator_id`.
