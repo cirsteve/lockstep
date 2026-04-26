@@ -13,12 +13,18 @@ Config shape (YAML or any dict-like):
       real:                 # only when kind == "real"
         rpc_url: ...
         indexer_url: ...
+        service_url: http://localhost:7878   # optional; TS storage service
         token_budget: 100
         log_path: logs/substrate-storage.jsonl   # optional
 
-Secrets are NOT in YAML. The signer key is read from the
-``LOCKSTEP_0G_PRIVATE_KEY`` environment variable; URLs can be
-overridden via ``LOCKSTEP_0G_GALILEO_RPC`` / ``LOCKSTEP_0G_GALILEO_INDEXER``
+Secrets are NOT in YAML and are NOT read by this factory. The wallet
+key (``LOCKSTEP_0G_PRIVATE_KEY``) is consumed by the TS storage service
+at boot — the Python adapter signs nothing on its own; it relays bytes
+through the service's HTTP surface. See ``services/storage-ts/README.md``
+"Trust boundary".
+
+URLs can be overridden via ``LOCKSTEP_0G_GALILEO_RPC`` /
+``LOCKSTEP_0G_GALILEO_INDEXER`` / ``LOCKSTEP_0G_STORAGE_SERVICE_URL``
 when present (env wins over YAML defaults).
 """
 
@@ -55,15 +61,22 @@ def get_storage_adapter(config: dict[str, Any]) -> StorageAdapter:
                 "storage.kind=real requires rpc_url and indexer_url "
                 "(in YAML or via LOCKSTEP_0G_GALILEO_RPC / LOCKSTEP_0G_GALILEO_INDEXER)"
             )
-        signer_key = os.environ.get("LOCKSTEP_0G_PRIVATE_KEY")
+        service_url = os.environ.get(
+            "LOCKSTEP_0G_STORAGE_SERVICE_URL"
+        ) or real_cfg.get("service_url")
         log_path_str = real_cfg.get("log_path")
-        return RealStorageAdapter(
-            rpc_url=rpc_url,
-            indexer_url=indexer_url,
-            signer_key=signer_key,
-            token_budget=real_cfg.get("token_budget", "100"),
-            log_path=Path(log_path_str) if log_path_str else None,
-        )
+        kwargs: dict[str, Any] = {
+            "rpc_url": rpc_url,
+            "indexer_url": indexer_url,
+            "token_budget": real_cfg.get("token_budget", "100"),
+            "log_path": Path(log_path_str) if log_path_str else None,
+        }
+        # Only pass service_url when env or YAML supplies it; otherwise
+        # let RealStorageAdapter's _DEFAULT_SERVICE_URL apply (single
+        # source of truth for the default).
+        if service_url:
+            kwargs["service_url"] = service_url
+        return RealStorageAdapter(**kwargs)
 
     raise ValueError(
         f"unknown storage.kind: {kind!r} (expected 'mock' or 'real')"

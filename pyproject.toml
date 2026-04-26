@@ -20,6 +20,7 @@ dependencies = [
     "web3>=6.15",
     "eth-account>=0.11",
     "pyyaml>=6.0.3",
+    "httpx>=0.28.1",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +30,7 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.3",
     "mypy>=1.8",
+    "respx>=0.23.1",
 ]
 # Used only by `scripts/datasets/build_*.py`. Heavy (~150 MB once
 # numpy + pandas + pyarrow land); not needed by the lockstep package

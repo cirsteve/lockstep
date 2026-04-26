@@ -1,16 +1,23 @@
 """Storage adapter conformance suite — runs against Mock and Real.
 
-Day 3 §2.3. The same six tests run against ``MockStorageAdapter`` and
-``RealStorageAdapter``; both must pass for an implementation to be
-considered Protocol-compliant. Real-adapter cases are gated by the
-``LOCKSTEP_TEST_REAL_STORAGE=1`` environment variable so they don't
-run by default and don't break CI when the testnet is flaky.
+Day 3 §2.3 + Day 4 §A.3. The same six tests run against
+``MockStorageAdapter`` and ``RealStorageAdapter``; both must pass for an
+implementation to be considered Protocol-compliant. Real-adapter cases
+are gated by the ``LOCKSTEP_TEST_REAL_STORAGE=1`` environment variable
+so they don't run by default and don't break CI when the testnet is
+flaky.
 
-Day 3 ships the suite running against Mock; the Real branch skips
-because ``RealStorageAdapter`` method bodies raise ``NotImplementedError``
-until the Day 4 PR wires the TS storage service. When that lands,
-flipping ``LOCKSTEP_TEST_REAL_STORAGE=1`` exercises the same suite
-against live Galileo without changing any test code.
+When ``LOCKSTEP_TEST_REAL_STORAGE=1`` is set the fixture also probes
+the TS storage service's ``/healthz`` and skips with a clear message if
+the service isn't running on the configured URL. Boot it with
+``cd services/storage-ts && npm run dev`` first.
+
+Per the §A.3 review item, partial-pass classification splits failures
+into integrity-vs-transport categories: ``TrustViolation`` is byzantine
+evidence (substrate bug — fix before merging), other ``SubstrateError``
+subclasses are transport (could retry up to 3× with backoff). The
+``classify_failure`` helper at the bottom of the file supports test
+runners that want to triage failures programmatically.
 """
 
 from __future__ import annotations
@@ -19,12 +26,13 @@ import hashlib
 import os
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+import httpx
 import pytest
 
 from lockstep.domains.coin_flip.evaluation import CoinFlipEvaluation
-from lockstep.errors import TrustViolation
+from lockstep.errors import SubstrateError, TrustViolation
 from lockstep.evaluation.receipt import (
     EnclaveAttestation,
     Receipt,
@@ -104,12 +112,50 @@ def _real_adapter_or_skip(tmp_path: Path) -> RealStorageAdapter:
     indexer_url = os.environ.get(
         "LOCKSTEP_0G_GALILEO_INDEXER", "https://indexer-storage-testnet-turbo.0g.ai"
     )
+    service_url = os.environ.get(
+        "LOCKSTEP_0G_STORAGE_SERVICE_URL", "http://localhost:7878"
+    )
+    # The wallet key is read by the TS service at boot, not by the
+    # Python adapter — but the service can't start without it, so an
+    # unset env var is a reliable signal that the service won't be
+    # serviceable for live conformance.
     if not os.environ.get("LOCKSTEP_0G_PRIVATE_KEY"):
         pytest.skip("LOCKSTEP_0G_PRIVATE_KEY not set; cannot run real-adapter conformance")
+
+    # Probe the TS storage service before constructing the adapter. A
+    # missing service is the most common reason these tests fail in
+    # ways that look like infrastructure outages but are actually local
+    # — boot the service with `cd services/storage-ts && npm run dev`.
+    try:
+        resp = httpx.get(f"{service_url}/healthz", timeout=3.0)
+    except httpx.RequestError as exc:
+        pytest.skip(
+            f"TS storage service unreachable at {service_url} ({exc}). "
+            "Boot it with `cd services/storage-ts && npm run dev` before "
+            "running the Real conformance branch."
+        )
+    if resp.status_code != 200:
+        pytest.skip(
+            f"TS storage service /healthz returned {resp.status_code} "
+            f"(expected 200): {resp.text[:200]}"
+        )
+    try:
+        health = resp.json()
+    except ValueError as exc:
+        pytest.skip(
+            f"TS storage service /healthz returned non-JSON body "
+            f"({exc}): {resp.text[:200]}"
+        )
+    if not health.get("indexer_reachable", False):
+        pytest.skip(
+            f"TS storage service can't reach the 0G indexer at "
+            f"{health.get('indexer_url')}; conformance can't run end-to-end."
+        )
+
     return RealStorageAdapter(
         rpc_url=rpc_url,
         indexer_url=indexer_url,
-        signer_key=os.environ["LOCKSTEP_0G_PRIVATE_KEY"],
+        service_url=service_url,
         log_path=tmp_path / "storage.jsonl",
     )
 
@@ -148,16 +194,25 @@ def test_upload_download_roundtrip_preserves_bytes(adapter: Any) -> None:
     assert enc.bundle_hash == _root(bundle)
 
 
-def test_download_with_wrong_merkle_commitment_raises_trust_violation(
-    adapter: Any,
-) -> None:
+def test_download_with_wrong_merkle_commitment_fails(adapter: Any) -> None:
+    """Tampering with the commitment between upload and download is
+    detected. The exception type differs by adapter:
+
+    - Mock keys by `commitment.storage_uri`, so a wrong `public_root`
+      still resolves to bytes — sha256 mismatch raises TrustViolation.
+    - Real keys by sha256 (per §A.0), so a wrong `public_root` doesn't
+      resolve at all — the service returns 404 not_in_index, mapped to
+      SubstrateError.
+
+    Both detect the tampering. Assert against the common base class
+    (`SubstrateError` is the parent of `TrustViolation`)."""
     public = b"public-portion" * 16
     private = b"private-portion" * 16
     commitment = _build_dataset_commitment(public, private)
     adapter.upload_dataset(commitment, public, private)
 
     bad_commitment = commitment.model_copy(update={"public_root": "0x" + "00" * 32})
-    with pytest.raises(TrustViolation):
+    with pytest.raises(SubstrateError):
         adapter.load_dataset_public(bad_commitment)
 
 
@@ -206,3 +261,51 @@ def test_signature_verification_fails_on_tampered_bytes(adapter: Any) -> None:
     uri = adapter.upload_receipt(tampered)
     with pytest.raises(TrustViolation):
         adapter.download_receipt(uri)
+
+
+# ---------------------------------------------------------------------------
+# Partial-pass classification helper (Day 4 §A.3)
+# ---------------------------------------------------------------------------
+
+
+FailureKind = Literal["integrity", "transport", "unknown"]
+
+
+def classify_failure(exc: BaseException) -> FailureKind:
+    """Classify a conformance-test failure for partial-pass triage.
+
+    The §A.3 review item splits the response on a partial pass:
+
+    - ``integrity`` failures (``TrustViolation``) are byzantine
+      evidence — the substrate produced bytes that disagree with their
+      commitment, or a signature didn't verify, or an unauthorized
+      pubkey reached sealed data. Treat as a substrate bug; fix in
+      the TS service or Python adapter before considering §A landed.
+      **Do not retry past an integrity failure.**
+
+    - ``transport`` failures (``SubstrateError`` that isn't
+      ``TrustViolation``) are transient — timeouts, indexer flakes,
+      RPC drops. Retry up to 3× with backoff. If still failing,
+      document as known-flaky in the test docstring and surface in §F
+      STATUS so Day 5 can revisit.
+
+    - ``unknown`` covers everything else (assertion errors, unrelated
+      exceptions). Treat as a hard failure; investigate before
+      assuming retry is appropriate.
+
+    Use from a wrapper test runner that's responsible for triage; the
+    individual tests don't change behavior based on this function.
+    """
+    if isinstance(exc, TrustViolation):
+        return "integrity"
+    if isinstance(exc, SubstrateError):
+        return "transport"
+    return "unknown"
+
+
+def test_classify_failure_matrix() -> None:
+    """Sanity-check the classifier against representative exceptions."""
+    assert classify_failure(TrustViolation("byzantine")) == "integrity"
+    assert classify_failure(SubstrateError("indexer timeout")) == "transport"
+    assert classify_failure(AssertionError("unexpected")) == "unknown"
+    assert classify_failure(RuntimeError("other")) == "unknown"
