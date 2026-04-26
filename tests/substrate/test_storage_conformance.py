@@ -185,16 +185,25 @@ def test_upload_download_roundtrip_preserves_bytes(adapter: Any) -> None:
     assert enc.bundle_hash == _root(bundle)
 
 
-def test_download_with_wrong_merkle_commitment_raises_trust_violation(
-    adapter: Any,
-) -> None:
+def test_download_with_wrong_merkle_commitment_fails(adapter: Any) -> None:
+    """Tampering with the commitment between upload and download is
+    detected. The exception type differs by adapter:
+
+    - Mock keys by `commitment.storage_uri`, so a wrong `public_root`
+      still resolves to bytes — sha256 mismatch raises TrustViolation.
+    - Real keys by sha256 (per §A.0), so a wrong `public_root` doesn't
+      resolve at all — the service returns 404 not_in_index, mapped to
+      SubstrateError.
+
+    Both detect the tampering. Assert against the common base class
+    (`SubstrateError` is the parent of `TrustViolation`)."""
     public = b"public-portion" * 16
     private = b"private-portion" * 16
     commitment = _build_dataset_commitment(public, private)
     adapter.upload_dataset(commitment, public, private)
 
     bad_commitment = commitment.model_copy(update={"public_root": "0x" + "00" * 32})
-    with pytest.raises(TrustViolation):
+    with pytest.raises(SubstrateError):
         adapter.load_dataset_public(bad_commitment)
 
 
