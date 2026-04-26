@@ -1,6 +1,6 @@
 """Build the canonical market-neutral trading dataset.
 
-Day 4 §B.1. Reads funding + spot OHLCV + perp OHLCV for BTC/ETH from
+Day 4 §B.1. Reads funding + spot OHLCV + perp OHLCV for AVAX from
 ``data/raw/`` (populated from gecko's TA store on willie — see
 ``scripts/datasets/README.md``), joins on hourly timestamp, computes
 basis from spot/perp closes, labels each bar with one of three funding
@@ -9,16 +9,24 @@ chronologically, and persists a :class:`MarketNeutralDataset`
 (commitment + bars + walk-forward windows) to
 ``lockstep/domains/trading/market_neutral/canonical_dataset.json``.
 
-This commit (PR #6 step 2) ships only the loader + timestamp join.
-Basis derivation, regime labeling, persistence, and the methodology
-report land in subsequent commits.
+Asset selection — AVAX (single-coin) is canonical for the
+market-neutral dataset, NOT the BTC/ETH the spec originally proposed.
+The 240-day perp data window (`ta`'s coverage) was too narrow for
+BTC/ETH funding to clear the spec's `|rate| > 0.0001` per 8h
+threshold in both tails — both coins landed >90% in `funding_neutral`
+with <10% in either positive or negative. ADA, BCH, and AVAX+BCH
+combined also fell short. AVAX alone produces a clean regime
+distribution (14% / 15% / 71%) and is the only candidate hitting the
+≥10% balance band in every regime within our window. Per spec
+guidance "do not fudge the threshold" — pick a different asset
+selection. Single-coin keeps the demo simpler than the directional
+dataset (which has 3 coins) without sacrificing methodology.
 
 Funding-rate frequency note: Hyperliquid charges funding **hourly**,
 not every 8h like most perps. The spec's regime threshold of
-``|rate| > 0.0001`` is canonically per-8h-window — so step 3 of the
-plan resamples to 8h windows by sum (not mean — funding accrues,
-doesn't average) before applying the threshold. The hourly join here
-preserves the raw funding stream for that downstream resample.
+``|rate| > 0.0001`` is canonically per-8h-window — so we resample to
+8h windows by sum (not mean — funding accrues, doesn't average)
+before applying the threshold.
 
 Usage::
 
@@ -34,15 +42,27 @@ from pathlib import Path
 
 import pandas as pd
 
+from lockstep.domains.trading.market_neutral.dataset import (
+    FUNDING_THRESHOLD,
+    VALID_REGIMES,
+    classify_funding_regime,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RAW_FUNDING_DIR = REPO_ROOT / "data" / "raw" / "hyperliquid" / "funding_rates"
 RAW_SPOT_DIR = REPO_ROOT / "data" / "raw" / "binance" / "candles_spot"
 RAW_PERP_DIR = REPO_ROOT / "data" / "raw" / "hyperliquid" / "candles_perp"
 
-ASSETS = ("BTC", "ETH")
+ASSETS: tuple[str, ...] = ("AVAX",)
 HOURLY_STEP_MS = 3_600_000
 EIGHT_HOUR_MS = 8 * HOURLY_STEP_MS
 HOURS_PER_WINDOW = 8
+
+# Spec §B.1: each of the three funding regimes must hit ≥10% of bars.
+# Below that, the data window can't differentiate strategies and the
+# script surfaces (or fails, with --strict). DO NOT fudge the threshold
+# downstream — pick a different window.
+REGIME_FLOOR = 0.10
 
 
 def _load_one_coin(
@@ -160,6 +180,36 @@ def _add_basis_and_resample_funding(df: pd.DataFrame) -> pd.DataFrame:
     return out.drop(columns=["window_8h", "funding_rate_8h"]).reset_index(drop=True)
 
 
+def _label_regimes(df: pd.DataFrame) -> pd.DataFrame:
+    """Add a ``regime`` column via classify_funding_regime on the 8h sum.
+
+    Assumes ``_add_basis_and_resample_funding`` has already replaced
+    the hourly funding with the 8h-window sum, so the threshold check
+    (``|rate| > FUNDING_THRESHOLD``) lands in the spec's per-8h units.
+    """
+    out = df.copy()
+    out["regime"] = out["funding_rate"].apply(classify_funding_regime)
+    return out
+
+
+def _regime_distribution(df: pd.DataFrame) -> dict[str, float]:
+    """Fraction of bars in each of the three regimes."""
+    total = len(df)
+    if total == 0:
+        return {r: 0.0 for r in VALID_REGIMES}
+    counts = df["regime"].value_counts().to_dict()
+    return {r: counts.get(r, 0) / total for r in VALID_REGIMES}
+
+
+def _check_regime_balance(dist: dict[str, float]) -> list[str]:
+    """Return list of regimes below ``REGIME_FLOOR`` (the 10% spec band)."""
+    return [
+        f"{r} = {dist[r]:.1%} (< {REGIME_FLOOR:.0%})"
+        for r in VALID_REGIMES
+        if dist[r] < REGIME_FLOOR
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -200,23 +250,50 @@ def main(argv: list[str] | None = None) -> int:
 
         resampled = _add_basis_and_resample_funding(joined)
         partial_dropped = len(joined) - len(resampled)
-        per_coin[coin] = resampled
+        labeled = _label_regimes(resampled)
+        per_coin[coin] = labeled
+        per_coin_dist = _regime_distribution(labeled)
         print(
-            f"     basis: median={resampled['basis_bps'].median():+.2f} bps  "
-            f"min/max={resampled['basis_bps'].min():+.1f}/{resampled['basis_bps'].max():+.1f} bps"
+            f"     basis: median={labeled['basis_bps'].median():+.2f} bps  "
+            f"min/max={labeled['basis_bps'].min():+.1f}/{labeled['basis_bps'].max():+.1f} bps"
         )
         print(
-            f"     funding (8h sums): median={resampled['funding_rate'].median()*1e4:+.3f} bps  "
-            f"min/max={resampled['funding_rate'].min()*1e4:+.2f}/{resampled['funding_rate'].max()*1e4:+.2f} bps  "
+            f"     funding (8h sums): median={labeled['funding_rate'].median()*1e4:+.3f} bps  "
+            f"min/max={labeled['funding_rate'].min()*1e4:+.2f}/{labeled['funding_rate'].max()*1e4:+.2f} bps  "
             f"(dropped {partial_dropped} bars in incomplete 8h windows)"
         )
+        print(
+            f"     regimes: positive={per_coin_dist['funding_positive']:.1%} "
+            f"negative={per_coin_dist['funding_negative']:.1%} "
+            f"neutral={per_coin_dist['funding_neutral']:.1%}"
+        )
 
-    total_rows = sum(len(df) for df in per_coin.values())
-    print(f"\noverall: {total_rows} hourly rows across {len(ASSETS)} coins")
+    all_bars = pd.concat(per_coin.values(), ignore_index=True)
+    overall_dist = _regime_distribution(all_bars)
+    print(f"\noverall: {len(all_bars)} hourly rows across {len(ASSETS)} coins")
+    print(
+        f"regimes: positive={overall_dist['funding_positive']:.1%} "
+        f"negative={overall_dist['funding_negative']:.1%} "
+        f"neutral={overall_dist['funding_neutral']:.1%}  "
+        f"(threshold |rate| > {FUNDING_THRESHOLD} per 8h)"
+    )
 
-    # Steps 4 (regime labels + threshold tuning), 5 (split + commitment +
-    # persist), and 6 (report) land in subsequent commits.
-    print("\n[skeleton] regime / split / persist not yet implemented (steps 4-6).")
+    issues = _check_regime_balance(overall_dist)
+    if issues:
+        msg = (
+            f"regime distribution outside {REGIME_FLOOR:.0%} balance band: "
+            + "; ".join(issues)
+            + "\n  do NOT fudge the threshold — pick a different historical "
+              "window or surface to Steve (per spec §B.1 step 4)"
+        )
+        if args.strict:
+            print(f"FATAL: {msg}", file=sys.stderr)
+            return 1
+        print(f"WARN: {msg}")
+
+    # Steps 5 (split + commitment + persist) and 6 (report) land in
+    # subsequent commits.
+    print("\n[skeleton] split / persist not yet implemented (steps 5-6).")
     return 0
 
 
