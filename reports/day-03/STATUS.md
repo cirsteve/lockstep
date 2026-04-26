@@ -16,7 +16,7 @@ This doc is the input to the Day 4 spec drafter. Concrete and recommendation-ori
 - **Config-driven adapter selection** — `lockstep/substrate/factory.py` + `config/local.yaml` (mock) + `config/galileo.yaml` (real, env-var-overridable URLs). `examples/demo_flow.py` refactored to `--config <path>` while preserving the no-args integration-test contract.
 - **Six-test conformance suite** — `tests/substrate/test_storage_conformance.py` parameterized over Mock and Real; Real branch skips when `LOCKSTEP_TEST_REAL_STORAGE` is unset. Made all six pass on Mock by adding `EnclaveAttestation.verify_signature(payload)` and tightening `MockStorageAdapter` to raise `TrustViolation` (not `StorageError`) on byzantine conditions + verify bundle-hash and receipt-signature on download.
 
-**Test counts:** 86 (Day 2 baseline) → **118 passed, 6 skipped**. The 6 skips are the Real-adapter conformance branch awaiting Day 4 wiring + creds.
+**Test counts:** 86 (Day 2 baseline) → **122 passed, 6 skipped** (118 from the §2.1–§2.4 work; +4 added by the late `d9f15d0` commit that addressed Copilot's retry-deadline review and added `_RetryBudget` validation tests). The 6 skips are the Real-adapter conformance branch awaiting Day 4 wiring + creds.
 
 ### PR #3 — Track C (datasets), 2 commits
 - **Setup** — `pandas` + `pyarrow` runtime deps; `/data/` + `/logs/` + `uv.lock` gitignored; `scripts/datasets/README.md` documenting the ssh-cat pipeline that pulls 5 parquet files (under 2 MB total) from gecko's TA Docker volume on willie into `data/raw/`.
@@ -29,6 +29,7 @@ This doc is the input to the Day 4 spec drafter. Concrete and recommendation-ori
 - **All clock-time references stripped** from the spec (was: 4pm, midday, morning/afternoon). Replaced with phase markers (`Phase 1`, `Checkpoint`, `Phase 2`, `Closing`) and genuine durations (e.g., 30-min smoke-test debugging timeboxes).
 
 ### Adapters: real vs Mock
+
 | Adapter | Status |
 |---|---|
 | storage | **Real skeleton landed**; method bodies Day 4 |
