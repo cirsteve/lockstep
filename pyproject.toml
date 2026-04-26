@@ -72,3 +72,8 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["web3.*", "eth_account.*"]
 ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "respx>=0.23.1",
+]
