@@ -79,12 +79,14 @@ REGIME_FLOOR = 0.10
 
 def _load_one_coin(
     coin: str, *, strict: bool = False
-) -> tuple[pd.DataFrame, dict[str, int]]:
+) -> tuple[pd.DataFrame, dict[str, int], dict[str, int]]:
     """Load funding + spot + perp parquets for a coin and inner-join on timestamp.
 
-    Returns ``(joined_df, gap_counts)``. ``joined_df`` has one row per
-    hourly bar present in all three sources; ``gap_counts`` reports
-    per-source non-hourly diffs in the raw streams.
+    Returns ``(joined_df, gap_counts, raw_counts)``. ``joined_df`` has
+    one row per hourly bar present in all three sources; ``gap_counts``
+    reports per-source non-hourly diffs in the raw streams;
+    ``raw_counts`` reports per-source row counts before any processing
+    (useful for the diagnostics line in ``main()``).
     """
     funding_path = RAW_FUNDING_DIR / f"{coin}.parquet"
     spot_path = RAW_SPOT_DIR / f"{coin}_1h.parquet"
@@ -99,6 +101,7 @@ def _load_one_coin(
     funding = (
         pd.read_parquet(funding_path).sort_values("timestamp").reset_index(drop=True)
     )
+    raw_counts = {"funding": len(funding)}
     # Hyperliquid funding events fire approximately on hourly
     # boundaries with millisecond-level drift (e.g. 1704067200151 =
     # top-of-hour + 151 ms). Snap to the hour so the timestamp join
@@ -113,6 +116,8 @@ def _load_one_coin(
 
     spot = pd.read_parquet(spot_path).sort_values("timestamp").reset_index(drop=True)
     perp = pd.read_parquet(perp_path).sort_values("timestamp").reset_index(drop=True)
+    raw_counts["spot"] = len(spot)
+    raw_counts["perp"] = len(perp)
 
     def _gap_count(df: pd.DataFrame) -> int:
         diffs = df["timestamp"].diff().dropna()
@@ -143,7 +148,7 @@ def _load_one_coin(
         )
     )
     joined["coin"] = coin
-    return joined, gaps
+    return joined, gaps, raw_counts
 
 
 def _add_basis_and_resample_funding(df: pd.DataFrame) -> pd.DataFrame:
@@ -263,26 +268,15 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"reading {len(ASSETS)} coins")
     per_coin: dict[str, pd.DataFrame] = {}
-    per_coin_raw_counts: dict[str, dict[str, int]] = {}
     for coin in ASSETS:
-        funding_raw = pd.read_parquet(RAW_FUNDING_DIR / f"{coin}.parquet")
-        spot_raw = pd.read_parquet(RAW_SPOT_DIR / f"{coin}_1h.parquet")
-        perp_raw = pd.read_parquet(RAW_PERP_DIR / f"{coin}_1h.parquet")
-        per_coin_raw_counts[coin] = {
-            "funding": len(funding_raw),
-            "spot": len(spot_raw),
-            "perp": len(perp_raw),
-        }
-
-        joined, gaps = _load_one_coin(coin, strict=args.strict)
+        joined, gaps, raw_counts = _load_one_coin(coin, strict=args.strict)
         if any(gaps.values()):
             print(f"WARN: {coin} non-hourly gaps: {gaps}")
-        smallest_source = min(per_coin_raw_counts[coin].values())
+        smallest_source = min(raw_counts.values())
         dropped = smallest_source - len(joined)
         print(
-            f"  {coin}: raw rows funding={per_coin_raw_counts[coin]['funding']} "
-            f"spot={per_coin_raw_counts[coin]['spot']} "
-            f"perp={per_coin_raw_counts[coin]['perp']}  "
+            f"  {coin}: raw rows funding={raw_counts['funding']} "
+            f"spot={raw_counts['spot']} perp={raw_counts['perp']}  "
             f"→ joined {len(joined)} (dropped {dropped} unmatched from smallest side)  "
             f"gaps funding={gaps['funding']} spot={gaps['spot']} perp={gaps['perp']}"
         )
@@ -363,13 +357,20 @@ def main(argv: list[str] | None = None) -> int:
         schema_version="v1",
     )
 
-    # Compute walk-forward indices from the unique-timestamp count, not
-    # from `len(public_bars)`. With single-coin AVAX they're equal, but
-    # if `ASSETS` ever grows to multiple coins, `len(public_bars)`
-    # becomes `n_coins × n_unique_ts_public` and a midpoint-by-bar-count
-    # would straddle coin boundaries inside the window. Indexing by
-    # unique-timestamp count keeps the window meaningful as a
-    # time-bounded slice.
+    # `walk_forward_windows` is currently unused by any grader (no code
+    # under `lockstep/` slices `public_bars` with these indices), so the
+    # choice between bar-index and unique-timestamp space is moot today
+    # and the values are identical for single-coin AVAX. We compute in
+    # unique-timestamp space anyway for future-multi-coin safety: with
+    # multiple coins, `len(public_bars) == n_coins × n_unique_ts_public`
+    # and midpoint-by-bar-count straddles coin boundaries inside a
+    # window. Indexing by unique-timestamp count keeps the slice
+    # meaningful as a time bound regardless of coin count.
+    #
+    # Note: this diverges from `build_directional.py`, which uses
+    # `len(public_bars) // 2`. Reviewers split on which convention to
+    # follow; resolve when something actually consumes the field. See
+    # PR #2 review thread for the back-and-forth.
     n_unique_ts_public = len({b["timestamp"] for b in public_bars})
     walk_forward_windows = ((n_unique_ts_public // 2, n_unique_ts_public),)
     payload = {

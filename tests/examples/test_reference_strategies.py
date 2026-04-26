@@ -55,22 +55,35 @@ def _load(path: pathlib.Path) -> str:
 
 def _load_directional_canonical() -> DirectionalDataset:
     payload = json.loads(DIRECTIONAL_CANONICAL_JSON.read_text(encoding="utf-8"))
-    return DirectionalDataset(
+    dataset = DirectionalDataset(
         commitment=DatasetCommitment(**payload["commitment"]),
         public_bars=tuple(payload["public_bars"]),
         private_bars=tuple(payload["private_bars"]),
         walk_forward_windows=tuple(tuple(w) for w in payload["walk_forward_windows"]),
     )
+    # Catch accidental edits / corruption of the committed JSON early —
+    # a tampered file would silently grade against bytes that don't
+    # match the recorded Merkle roots.
+    assert dataset.verify_integrity(), (
+        "directional canonical_dataset.json failed verify_integrity(); "
+        "regenerate via scripts/datasets/build_directional.py"
+    )
+    return dataset
 
 
 def _load_market_neutral_canonical() -> MarketNeutralDataset:
     payload = json.loads(MARKET_NEUTRAL_CANONICAL_JSON.read_text(encoding="utf-8"))
-    return MarketNeutralDataset(
+    dataset = MarketNeutralDataset(
         commitment=DatasetCommitment(**payload["commitment"]),
         public_bars=tuple(payload["public_bars"]),
         private_bars=tuple(payload["private_bars"]),
         walk_forward_windows=tuple(tuple(w) for w in payload["walk_forward_windows"]),
     )
+    assert dataset.verify_integrity(), (
+        "market-neutral canonical_dataset.json failed verify_integrity(); "
+        "regenerate via scripts/datasets/build_market_neutral.py"
+    )
+    return dataset
 
 
 def test_all_strategies_load_and_grade_without_raising(

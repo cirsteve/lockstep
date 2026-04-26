@@ -22,7 +22,15 @@ def signal(funding_window, basis_window, state):
             "perp": {"direction": "flat", "size": 0.0},
         }
     last = window[-1]
-    basis_bps = last.get("basis_bps", 0.0)
+    # Prefer the precomputed basis_bps field; fall back to deriving it
+    # from basis + spot_close so older / synthetic datasets without
+    # basis_bps still trigger the strategy. Default 0 only if neither
+    # the precomputed field nor the source fields are present.
+    basis_bps = last.get("basis_bps")
+    if basis_bps is None:
+        basis = last.get("basis", 0.0)
+        spot_close = last.get("spot_close", 0.0)
+        basis_bps = (basis / spot_close * 10_000) if spot_close else 0.0
     if basis_bps > BASIS_BAND_BPS:
         return {
             "spot": {"direction": "long", "size": SIZE_PER_BAR},
