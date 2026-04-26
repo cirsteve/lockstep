@@ -206,15 +206,18 @@ class RealStorageAdapter:
         *,
         rpc_url: str,
         indexer_url: str,
-        signer_key: str | None = None,
         service_url: str = _DEFAULT_SERVICE_URL,
         token_budget: Decimal | str | float = _DEFAULT_TOKEN_BUDGET,
         log_path: Path | None = None,
         retry_budget: _RetryBudget | None = None,
     ) -> None:
+        # The signing key (LOCKSTEP_0G_PRIVATE_KEY) is read by the TS
+        # storage service at boot, not here. The Python adapter never
+        # touches the wallet directly — it relays bytes through the
+        # service's HTTP surface. See services/storage-ts/README.md
+        # "Trust boundary".
         self._rpc_url = rpc_url
         self._indexer_url = indexer_url
-        self._signer_key = signer_key
         self._service_url = service_url
         self._cost = _CostTracker(budget=Decimal(str(token_budget)))
         self._log_path = log_path or _LOG_PATH_DEFAULT

@@ -115,6 +115,10 @@ def _real_adapter_or_skip(tmp_path: Path) -> RealStorageAdapter:
     service_url = os.environ.get(
         "LOCKSTEP_0G_STORAGE_SERVICE_URL", "http://localhost:7878"
     )
+    # The wallet key is read by the TS service at boot, not by the
+    # Python adapter — but the service can't start without it, so an
+    # unset env var is a reliable signal that the service won't be
+    # serviceable for live conformance.
     if not os.environ.get("LOCKSTEP_0G_PRIVATE_KEY"):
         pytest.skip("LOCKSTEP_0G_PRIVATE_KEY not set; cannot run real-adapter conformance")
 
@@ -151,7 +155,6 @@ def _real_adapter_or_skip(tmp_path: Path) -> RealStorageAdapter:
     return RealStorageAdapter(
         rpc_url=rpc_url,
         indexer_url=indexer_url,
-        signer_key=os.environ["LOCKSTEP_0G_PRIVATE_KEY"],
         service_url=service_url,
         log_path=tmp_path / "storage.jsonl",
     )

@@ -24,7 +24,6 @@ def test_explicit_mock_kind_returns_mock_adapter():
 def test_real_kind_constructs_real_adapter_with_yaml_endpoints(monkeypatch):
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
-    monkeypatch.delenv("LOCKSTEP_0G_PRIVATE_KEY", raising=False)
 
     adapter = get_storage_adapter(
         {
@@ -41,13 +40,11 @@ def test_real_kind_constructs_real_adapter_with_yaml_endpoints(monkeypatch):
     assert isinstance(adapter, RealStorageAdapter)
     assert adapter._rpc_url == "https://yaml-rpc.example"
     assert adapter._indexer_url == "https://yaml-indexer.example"
-    assert adapter._signer_key is None  # no env var set
 
 
 def test_env_vars_override_yaml_endpoints(monkeypatch):
     monkeypatch.setenv("LOCKSTEP_0G_GALILEO_RPC", "https://env-rpc.example")
     monkeypatch.setenv("LOCKSTEP_0G_GALILEO_INDEXER", "https://env-indexer.example")
-    monkeypatch.setenv("LOCKSTEP_0G_PRIVATE_KEY", "0xdeadbeef")
 
     adapter = get_storage_adapter(
         {
@@ -62,7 +59,6 @@ def test_env_vars_override_yaml_endpoints(monkeypatch):
     )
     assert adapter._rpc_url == "https://env-rpc.example"
     assert adapter._indexer_url == "https://env-indexer.example"
-    assert adapter._signer_key == "0xdeadbeef"
 
 
 def test_real_kind_without_endpoints_raises_value_error(monkeypatch):
