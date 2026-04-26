@@ -339,16 +339,16 @@ app.post(
       const [pubTx, pubErr] = await uploadBytes(publicBytes);
       if (pubErr !== null) {
         res.status(502).json({
-          error: 'public_upload_failed',
-          detail: String(pubErr.message ?? pubErr),
+          error: 'upload_failed',
+          detail: `public side: ${String(pubErr.message ?? pubErr)}`,
         });
         return;
       }
       const [privTx, privErr] = await uploadBytes(privateBytes);
       if (privErr !== null) {
         res.status(502).json({
-          error: 'private_upload_failed',
-          detail: String(privErr.message ?? privErr),
+          error: 'upload_failed',
+          detail: `private side: ${String(privErr.message ?? privErr)}`,
         });
         return;
       }
@@ -435,15 +435,24 @@ app.get('/load-dataset-full', async (req, res) => {
     const attestationPubkey = String(
       req.query.attestation_pubkey ?? '',
     ).toLowerCase();
-    if (
-      !ROOT_HASH_RE.test(publicRoot) ||
-      !ROOT_HASH_RE.test(privateRoot) ||
-      !ROOT_HASH_RE.test(attestationPubkey)
-    ) {
+    if (!ROOT_HASH_RE.test(publicRoot)) {
       res.status(400).json({
-        error: 'invalid_param',
-        detail:
-          'public_root, private_root, and attestation_pubkey must each be 0x-prefixed 64-hex',
+        error: 'invalid_root',
+        detail: 'public_root must be 0x-prefixed 64-hex',
+      });
+      return;
+    }
+    if (!ROOT_HASH_RE.test(privateRoot)) {
+      res.status(400).json({
+        error: 'invalid_root',
+        detail: 'private_root must be 0x-prefixed 64-hex',
+      });
+      return;
+    }
+    if (!ROOT_HASH_RE.test(attestationPubkey)) {
+      res.status(400).json({
+        error: 'invalid_pubkey',
+        detail: 'attestation_pubkey must be 0x-prefixed 64-hex',
       });
       return;
     }
@@ -470,15 +479,15 @@ app.get('/load-dataset-full', async (req, res) => {
     ]);
     if (pubErr !== null) {
       res.status(502).json({
-        error: 'public_download_failed',
-        detail: String(pubErr.message ?? pubErr),
+        error: 'download_failed',
+        detail: `public side: ${String(pubErr.message ?? pubErr)}`,
       });
       return;
     }
     if (privErr !== null) {
       res.status(502).json({
-        error: 'private_download_failed',
-        detail: String(privErr.message ?? privErr),
+        error: 'download_failed',
+        detail: `private side: ${String(privErr.message ?? privErr)}`,
       });
       return;
     }

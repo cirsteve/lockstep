@@ -99,8 +99,94 @@ only the `sha256 → 0G-rootHash` resolution is lost. Conformance and
 demo flows run inside a single service lifetime, so this is fine for
 the hackathon scope; persistence to disk is a Day 5+ concern.
 
+## Error contract
+
+Every error returns `{ "error": "<code>", "detail": "<human description>" }`
+with one of the codes below. The Python adapter switches on the status
+code and the `error` code; `detail` is for humans only.
+
+| Status | Meaning                                                                | `error` codes                                                                                          | Python mapping       |
+| ------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ | -------------------- |
+| 400    | Client bug — malformed input. Don't retry; fix the call site.          | `empty_body`, `missing_header`, `missing_payload`, `invalid_root`, `invalid_pubkey`, `invalid_uri`     | hard fail (no retry) |
+| 404    | Lookup miss in the per-process index (the bytes may exist on 0G but this service can't find them; service didn't upload it, or it restarted) | `not_in_index`                                                                                         | `SubstrateError`     |
+| 422    | Trust violation. Producer claim contradicts the bytes, or attestation pubkey isn't authorized. **Never retry** — this is byzantine evidence. | `public_root_mismatch`, `private_root_mismatch`, `attestation_not_authorized`                          | `TrustViolation`     |
+| 500    | Unexpected internal exception (catch-all). Treat as transient.         | `internal`                                                                                             | `SubstrateError`     |
+| 502    | Upstream 0G call (SDK / indexer / RPC) failed. Transient; retry per `_with_retry`. | `upload_failed`, `download_failed`                                                                     | `SubstrateError`     |
+
+`upload_failed` and `download_failed` carry side information in `detail`
+for the dataset endpoints (e.g. `"public side: ..."` / `"private side:
+..."`). The adapter doesn't branch on side — the side is for human
+debugging.
+
+The endpoints' integrity-check semantics are also enforced **server-side
+before paying for an upload**: `POST /upload-dataset` recomputes
+sha256 of the decoded base64 payload and compares to the claimed root.
+On mismatch the service returns 422 and never calls the SDK upload
+path. This means a wrong-root payload costs nothing in `0G`.
+
+The Python adapter performs the **same sha256 check on download**, even
+on HTTP 200 with a matching `X-Bundle-Hash` / `X-Content-Hash` /
+`X-Public-Root` / `X-Private-Root` header. The header is convenience;
+the integrity check uses the body bytes. The service is partially
+trusted (it holds the wallet key but not the trust assumptions of the
+substrate); double-checking on the consumer side is cheap and forecloses
+a class of bugs.
+
 ## Security
 
-The service binds to `127.0.0.1` only. It holds the wallet private key in
-memory; do not expose it beyond localhost. The README will expand on the
-threat model and operator checklist before PR #5 closes.
+The service binds to `127.0.0.1` only. **Never** expose it beyond
+localhost — the security model below relies on this.
+
+### Trust boundary
+
+The service holds `LOCKSTEP_0G_PRIVATE_KEY` in process memory and signs
+every chain transaction (every upload to 0G storage involves a flow
+contract `submit()` that pays the storage market fee). Anyone who can
+make HTTP requests to the service can:
+
+- Spend the wallet's `0G` balance, by uploading any payload they choose.
+- Authorize any attestation pubkey for `/load-dataset-full` reads, by
+  POSTing it to `/authorize-attestation`.
+- Read any dataset the service has uploaded in this lifetime, by
+  querying its `public_root` / `private_root` against
+  `/load-dataset-public` (no auth).
+
+The service does **not** authenticate callers. There's no API key, no
+mTLS, no IP allowlist beyond the `127.0.0.1` bind. The trust boundary
+is therefore "anyone with a TCP socket to the loopback interface" —
+which on a single-user dev box is the local user.
+
+### Operator checklist
+
+- [ ] Service binds to `127.0.0.1:7878`. Verify with `ss -tln | grep 7878`
+      after boot — port should show as `127.0.0.1:7878`, never
+      `0.0.0.0:7878` or `*:7878`.
+- [ ] No reverse proxy / nginx / Traefik / Cloudflare tunnel forwards
+      port 7878 to the public internet, a Tailscale tailnet, an
+      organization VPN, or any other non-loopback interface. The
+      service is a localhost-only dev tool, not a network service.
+- [ ] No `docker run -p 0.0.0.0:7878:7878` (or the implicit `-p
+      7878:7878` form, which binds to `0.0.0.0` by default). If
+      containerizing, use `-p 127.0.0.1:7878:7878` explicitly, or run
+      with `--network host` and let the in-process bind enforce.
+- [ ] Faucet wallet has minimum-viable `0G` balance — a couple `0G` is
+      plenty (~1.16 m`0G` per upload at the 2026-04-26 baseline). No
+      reason to keep larger balances on the service's wallet, even
+      though it's testnet — limits blast radius if the bind misconfig
+      ever does happen.
+- [ ] `.env` at the repo root is mode `600` and the wallet key is not
+      duplicated into shell history or any committed file.
+
+### What's NOT in the trust boundary
+
+- The service does not validate Python adapter input beyond shape
+  (`0x`-prefixed 64-hex, base64-decodable, etc.). It doesn't cross-check
+  payloads against any chain commitment — `commitment.storage_uri` and
+  `merkle_root` from `DatasetCommitment` are entirely the producer's
+  responsibility.
+- The service does not retry SDK calls — it returns 502 fast. The
+  Python adapter's `_with_retry` owns the retry budget so the wall-clock
+  contract is single-sided.
+- The service does not persist state to disk. Restart loses the
+  `datasetMap` and `authorizedAttestations` (per §A.0; see "State"
+  above).
