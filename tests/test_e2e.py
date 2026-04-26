@@ -147,7 +147,7 @@ def test_end_to_end_lockstep_interfaces():
     assert payload_a == payload_b
 
     # ----- Phase 6: Tamper detection -----
-    with pytest.raises(Exception, match="receipt_id mismatch"):
+    with pytest.raises(ValueError, match="receipt_id mismatch"):
         Receipt(
             receipt_id="0x" + "f" * 64,
             kind=ReceiptKind.INITIAL_GRADING,
@@ -221,7 +221,7 @@ def test_end_to_end_lockstep_interfaces():
     bytes_b = evaluator.canonical_bytes()
     assert bytes_a == bytes_b
 
-    with pytest.raises(Exception, match="rank_dimension"):
+    with pytest.raises(ValueError, match="rank_dimension"):
         Evaluator.build(
             domain_name="coin_flip_broken",
             domain_version="v1",

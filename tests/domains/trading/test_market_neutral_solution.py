@@ -45,5 +45,12 @@ def test_instantiate_returns_callable_with_paired_legs():
 def test_solver_attempting_import_os_is_rejected():
     bad = "import os\n" + SOURCE
     sol = MarketNeutralSolution(source=bad)
-    with pytest.raises(SandboxError, match="forbidden"):
+    with pytest.raises(SandboxError, match="import"):
+        sol.instantiate()
+
+
+def test_solver_attempting_from_import_is_rejected():
+    bad = "from os import path\n" + SOURCE
+    sol = MarketNeutralSolution(source=bad)
+    with pytest.raises(SandboxError, match="import"):
         sol.instantiate()

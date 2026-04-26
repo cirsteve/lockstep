@@ -45,7 +45,19 @@ def test_solver_attempting_import_os_is_rejected():
         "    return {\"direction\": \"flat\", \"size\": 0.0}\n"
     )
     sol = DirectionalSolution(source=bad_source)
-    with pytest.raises(SandboxError, match="forbidden"):
+    with pytest.raises(SandboxError, match="import"):
+        sol.instantiate()
+
+
+def test_solver_attempting_from_import_is_rejected():
+    """The substring filter alone misses ``from X import Y``; AST catches it."""
+    bad_source = (
+        "from os import path\n"
+        "def signal(window, state):\n"
+        "    return {\"direction\": \"flat\", \"size\": 0.0}\n"
+    )
+    sol = DirectionalSolution(source=bad_source)
+    with pytest.raises(SandboxError, match="import"):
         sol.instantiate()
 
 

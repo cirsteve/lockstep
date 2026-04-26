@@ -31,6 +31,7 @@ WASM, or gVisor isolation.
 
 from __future__ import annotations
 
+import ast
 import struct
 from collections.abc import Callable
 from typing import Any
@@ -68,8 +69,9 @@ _ALLOWED_BUILTINS: dict[str, Any] = {
     "None": None,
 }
 
+# Identifiers a legitimate solver doesn't need. Substring check is a
+# cheap surface filter; AST parsing below catches all import forms.
 _FORBIDDEN_SUBSTRINGS = (
-    "import ",
     "__import__",
     "open(",
     "compile(",
@@ -131,13 +133,24 @@ class MarketNeutralSolution(SolutionPayload):
                     f"solver source contains forbidden token: {token!r}"
                 )
 
+        try:
+            tree = ast.parse(self.source, "<solver>", "exec")
+        except SyntaxError as exc:
+            raise SandboxError(f"solver source failed to parse: {exc}") from exc
+
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                raise SandboxError(
+                    "solver source contains an import statement; "
+                    "imports are not permitted in the sandbox"
+                )
+
         sandbox_globals: dict[str, Any] = {
             "__builtins__": _ALLOWED_BUILTINS,
             "parameters": self.parameters,
         }
         try:
-            compiled = compile(self.source, "<solver>", "exec")
-            exec(compiled, sandbox_globals)  # noqa: S102 — sandbox surface
+            exec(compile(tree, "<solver>", "exec"), sandbox_globals)  # noqa: S102 — sandbox surface
         except Exception as exc:
             raise SandboxError(f"solver source failed to compile: {exc}") from exc
 
