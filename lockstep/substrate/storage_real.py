@@ -1,26 +1,31 @@
-"""Real 0G Storage adapter — skeleton + SDK-agnostic helpers.
+"""Real 0G Storage adapter — wired to the TS storage service.
 
-Day 3 ships the helpers and the constructor-level config plumbing
-(retry budget, structured log writer, cost tracker, network endpoints).
-The actual SDK-touching method bodies wait for Day 4, when wallet
-credentials and the SDK choice (between the published Python SDK,
-TS-via-subprocess, or direct JSON-RPC) can be exercised against
-0G Galileo. Until then, the methods raise ``NotImplementedError`` and
-the conformance tests for the real path skip cleanly.
+The adapter is a thin orchestrator: ``_StorageHttpClient`` talks to
+``services/storage-ts/`` over HTTP, this class wraps each call in
+``_with_retry``, charges ``_CostTracker`` from the on-chain receipt,
+emits a structured log event, and runs defense-in-depth integrity
+checks where there's a real trust anchor (``commitment.public_root``
+on dataset loads, the receipt's enclave signature on
+``download_receipt``).
 
 Design notes:
-- Construction must succeed without credentials so the factory can
-  build the adapter from config. Method calls fail until Day 4.
+- Construction must succeed without contacting the network — both
+  ``_StorageHttpClient`` and ``Web3.HTTPProvider`` lazy-connect on first
+  request. The factory can build the adapter from config without the
+  TS service running.
 - ``_RetryBudget`` and ``_with_retry`` only retry ``SubstrateError``;
   ``TrustViolation`` is byzantine evidence and propagates immediately.
 - ``_CostTracker`` raises ``SubstrateError`` on budget exhaustion
-  rather than silently draining the testnet faucet.
+  rather than silently draining the testnet faucet. Receipt-derived
+  cost falls back to ``_UPLOAD_COST_BASELINE`` if the RPC fetch fails;
+  silent zero would let a runaway loop drain the faucet.
 - ``_log_event`` accepts a per-instance log path so parallel pytest
   workers don't race on a shared file.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -30,9 +35,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from eth_typing import HexStr
+from web3 import Web3
+
 from lockstep.errors import SubstrateError, TrustViolation
-from lockstep.evaluation.canonical import Bytes32Hex
+from lockstep.evaluation.canonical import Bytes32Hex, canonical_json_bytes
 from lockstep.evaluation.solution import DatasetCommitment, EncryptedSolution
+from lockstep.substrate._storage_http import _StorageHttpClient
 
 if TYPE_CHECKING:
     from lockstep.evaluation.receipt import Receipt
@@ -40,6 +49,11 @@ if TYPE_CHECKING:
 
 _LOG_PATH_DEFAULT = Path("logs/substrate-storage.jsonl")
 _DEFAULT_TOKEN_BUDGET = Decimal("100")
+_DEFAULT_SERVICE_URL = "http://localhost:7878"
+# Measured 2026-04-26 baseline (~1.16 mG per upload). Charged when the
+# on-chain receipt fetch fails so a runaway loop can't drain the faucet
+# silently. See spec/day-04-LEARNINGS.md §D2 for the cost breakdown.
+_UPLOAD_COST_BASELINE = Decimal("0.0012")
 
 
 @dataclass(frozen=True)
@@ -178,14 +192,13 @@ class _CostTracker:
 
 
 class RealStorageAdapter:
-    """0G Galileo storage adapter — Day 3 skeleton.
+    """0G Galileo storage adapter wired to the TS storage service.
 
-    Construction succeeds without credentials. Method calls raise
-    ``NotImplementedError`` until Day 4 wires the SDK and credentials.
-    The factory can therefore build this from config, the conformance
-    suite can construct it for parameterized tests (the real-path
-    cases skip when ``LOCKSTEP_TEST_REAL_STORAGE`` is unset), and the
-    Day 4 PR fills in the method bodies without changing the surface.
+    Each public method is a thin orchestration over ``_StorageHttpClient``:
+    wrap in ``_with_retry``, charge cost from the chain receipt, emit a
+    log event. Defense-in-depth integrity checks run at the boundaries
+    that have a real trust anchor (commitment roots on dataset loads,
+    enclave signature on receipt download).
     """
 
     def __init__(
@@ -194,6 +207,7 @@ class RealStorageAdapter:
         rpc_url: str,
         indexer_url: str,
         signer_key: str | None = None,
+        service_url: str = _DEFAULT_SERVICE_URL,
         token_budget: Decimal | str | float = _DEFAULT_TOKEN_BUDGET,
         log_path: Path | None = None,
         retry_budget: _RetryBudget | None = None,
@@ -201,27 +215,83 @@ class RealStorageAdapter:
         self._rpc_url = rpc_url
         self._indexer_url = indexer_url
         self._signer_key = signer_key
+        self._service_url = service_url
         self._cost = _CostTracker(budget=Decimal(str(token_budget)))
         self._log_path = log_path or _LOG_PATH_DEFAULT
         self._retry_budget = retry_budget or _RetryBudget()
         self._authorized_attestations: set[str] = set()
+        self._http = _StorageHttpClient(service_url)
+        self._w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+    def close(self) -> None:
+        """Close the HTTP client. Tests use this; the demo flow leaks."""
+        self._http.close()
 
     def authorize_attestation(self, pubkey: Bytes32Hex) -> None:
         """Register an attestation pubkey as authorized for full-dataset reads.
 
         **Test scaffolding, not part of the StorageAdapter Protocol.**
-        Mirrors ``MockStorageAdapter.authorize_attestation`` so the
-        conformance suite and demo can construct either adapter and
-        seed an authorized pubkey before calling ``load_dataset_full``.
+        Mirrors ``MockStorageAdapter.authorize_attestation``. Posts to
+        the TS service so its in-memory gate is also populated, then
+        adds to the local set so ``load_dataset_full`` can short-circuit
+        unauthorized requests before the network call.
+
         In production the authorization comes from the ERC-7857 oracle
         re-encryption ceremony on the chain side — this method goes
         away once that flow lands (Day 5+).
         """
+        def fn() -> None:
+            self._http.authorize_attestation(pubkey)
+        _with_retry(fn, budget=self._retry_budget)
         self._authorized_attestations.add(pubkey.lower())
 
     def cost_spent(self) -> Decimal:
         """Cumulative testnet token cost charged through this adapter instance."""
         return self._cost.spent
+
+    # ---- internals ----
+
+    def _fetch_cost_0g(self, tx_hash: str) -> Decimal:
+        """Fetch transaction receipt + tx, return total spend in 0G.
+
+        cost = gasUsed * effectiveGasPrice + tx.value (storage market fee).
+        Returns ``_UPLOAD_COST_BASELINE`` if the RPC fetch fails so the
+        cost tracker can't silently zero out a real spend.
+        """
+        tx_hash_hex = HexStr(tx_hash)
+        try:
+            receipt = self._w3.eth.get_transaction_receipt(tx_hash_hex)
+            tx = self._w3.eth.get_transaction(tx_hash_hex)
+        except Exception:
+            return _UPLOAD_COST_BASELINE
+        cost_wei = (
+            int(receipt["gasUsed"]) * int(receipt["effectiveGasPrice"])
+            + int(tx["value"])
+        )
+        return Decimal(cost_wei) / Decimal(10**18)
+
+    def _emit_log(
+        self,
+        op: str,
+        *,
+        uri: str = "",
+        bytes_: int = 0,
+        cost: Decimal = Decimal(0),
+        latency_ms: float = 0.0,
+        status: str = "ok",
+    ) -> None:
+        _log_event(
+            self._log_path,
+            {
+                "ts": time.time(),
+                "op": op,
+                "uri": uri,
+                "bytes": bytes_,
+                "cost": str(cost),
+                "latency_ms": round(latency_ms, 3),
+                "status": status,
+            },
+        )
 
     def upload_encrypted_solution(
         self,
@@ -230,24 +300,86 @@ class RealStorageAdapter:
         plaintext_commitment: Bytes32Hex,
         recipient_pubkey: Bytes32Hex,
     ) -> EncryptedSolution:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        def fn() -> EncryptedSolution:
+            t0 = time.monotonic()
+            resp = self._http.upload_encrypted_solution(
+                bundle,
+                plaintext_commitment=plaintext_commitment,
+                recipient_pubkey=recipient_pubkey,
+            )
+            cost = self._fetch_cost_0g(resp["tx_hash"])
+            self._cost.charge(cost)
+            self._emit_log(
+                "upload_encrypted_solution",
+                uri=resp["storage_uri"],
+                bytes_=len(bundle),
+                cost=cost,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return EncryptedSolution(
+                plaintext_commitment=plaintext_commitment,
+                bundle_hash=resp["bundle_hash"],
+                storage_uri=resp["storage_uri"],
+                recipient_pubkey=recipient_pubkey,
+            )
+
+        return _with_retry(fn, budget=self._retry_budget)
 
     def download_encrypted_solution(self, uri: str) -> bytes:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        def fn() -> bytes:
+            t0 = time.monotonic()
+            body = self._http.download_encrypted_solution(uri)
+            self._emit_log(
+                "download_encrypted_solution",
+                uri=uri,
+                bytes_=len(body),
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return body
+
+        return _with_retry(fn, budget=self._retry_budget)
 
     def upload_receipt(self, receipt: Receipt) -> str:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        def fn() -> str:
+            t0 = time.monotonic()
+            body = canonical_json_bytes(receipt.model_dump(mode="json"))
+            resp = self._http.upload_receipt(body)
+            cost = self._fetch_cost_0g(resp["tx_hash"])
+            self._cost.charge(cost)
+            self._emit_log(
+                "upload_receipt",
+                uri=resp["uri"],
+                bytes_=len(body),
+                cost=cost,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return resp["uri"]
+
+        return _with_retry(fn, budget=self._retry_budget)
 
     def download_receipt(self, uri: str) -> Receipt:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        from lockstep.evaluation.receipt import Receipt as _Receipt
+
+        def fn() -> Receipt:
+            t0 = time.monotonic()
+            body = self._http.download_receipt(uri)
+            receipt = _Receipt.model_validate_json(body)
+            if not receipt.enclave.verify_signature(
+                receipt.canonical_signing_payload()
+            ):
+                raise TrustViolation(
+                    f"receipt signature invalid for {uri} "
+                    f"(pubkey {receipt.enclave.pubkey})"
+                )
+            self._emit_log(
+                "download_receipt",
+                uri=uri,
+                bytes_=len(body),
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return receipt
+
+        return _with_retry(fn, budget=self._retry_budget)
 
     def upload_dataset(
         self,
@@ -255,21 +387,81 @@ class RealStorageAdapter:
         public_payload: bytes,
         private_payload: bytes,
     ) -> None:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        def fn() -> None:
+            t0 = time.monotonic()
+            resp = self._http.upload_dataset(
+                public_root=commitment.public_root,
+                private_root=commitment.private_root,
+                public_payload=public_payload,
+                private_payload=private_payload,
+            )
+            cost_pub = self._fetch_cost_0g(resp["public_tx_hash"])
+            cost_priv = self._fetch_cost_0g(resp["private_tx_hash"])
+            cost = cost_pub + cost_priv
+            self._cost.charge(cost)
+            self._emit_log(
+                "upload_dataset",
+                uri=commitment.storage_uri,
+                bytes_=len(public_payload) + len(private_payload),
+                cost=cost,
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+
+        _with_retry(fn, budget=self._retry_budget)
 
     def load_dataset_public(self, commitment: DatasetCommitment) -> bytes:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        def fn() -> bytes:
+            t0 = time.monotonic()
+            body = self._http.load_dataset_public(commitment.public_root)
+            actual_root = "0x" + hashlib.sha256(body).hexdigest()
+            if actual_root != commitment.public_root.lower():
+                raise TrustViolation(
+                    f"public payload root mismatch for commitment "
+                    f"{commitment.storage_uri}: expected "
+                    f"{commitment.public_root}, got {actual_root}"
+                )
+            self._emit_log(
+                "load_dataset_public",
+                uri=commitment.storage_uri,
+                bytes_=len(body),
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return body
+
+        return _with_retry(fn, budget=self._retry_budget)
 
     def load_dataset_full(
         self, commitment: DatasetCommitment, attestation_pubkey: Bytes32Hex
     ) -> bytes:
-        raise NotImplementedError(
-            "RealStorageAdapter pending SDK choice + Galileo credentials — Day 4 PR"
-        )
+        # Local short-circuit: fail before the network call if the pubkey
+        # was never authorized via this adapter. Mirrors Mock semantics
+        # and saves one round-trip on the unauthorized path.
+        if attestation_pubkey.lower() not in self._authorized_attestations:
+            raise TrustViolation(
+                f"attestation pubkey {attestation_pubkey} not authorized "
+                "for full dataset access"
+            )
+
+        def fn() -> bytes:
+            t0 = time.monotonic()
+            # The TS service verifies sha256(public) == public_root and
+            # sha256(private) == private_root before returning the
+            # concatenated body. We don't get the split point in the
+            # response, so per-side defense-in-depth is server-side only.
+            body = self._http.load_dataset_full(
+                public_root=commitment.public_root,
+                private_root=commitment.private_root,
+                attestation_pubkey=attestation_pubkey,
+            )
+            self._emit_log(
+                "load_dataset_full",
+                uri=commitment.storage_uri,
+                bytes_=len(body),
+                latency_ms=(time.monotonic() - t0) * 1000,
+            )
+            return body
+
+        return _with_retry(fn, budget=self._retry_budget)
 
 
 __all__ = ["RealStorageAdapter"]

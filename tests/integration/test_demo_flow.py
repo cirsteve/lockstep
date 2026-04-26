@@ -7,6 +7,7 @@ regresses, this test catches it before the rest of the suite has to.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import subprocess
 import sys
@@ -68,12 +69,22 @@ def test_demo_emits_live_execution_receipt(demo_output: str) -> None:
     assert "LIVE_EXECUTION receipt" in demo_output
 
 
-def test_demo_with_galileo_config_fails_with_not_implemented_error() -> None:
+def test_demo_with_galileo_config_fails_when_service_unreachable() -> None:
     """Wiring sanity check: --config galileo.yaml routes storage through
-    RealStorageAdapter, whose method bodies raise NotImplementedError
-    until Day 4. Confirms the factory + config plumbing actually swaps
-    the adapter rather than silently falling back to Mock."""
+    RealStorageAdapter wired to the TS storage service. With no service
+    running on the configured URL, the first network call surfaces a
+    transport error — confirming the factory + config plumbing swaps
+    the adapter rather than silently falling back to Mock.
+
+    Pre-Day-4 this test asserted NotImplementedError; once the method
+    bodies wire to the HTTP client, the failure mode shifts to
+    SubstrateError on connection refused. The intent (verify the swap
+    happens) is unchanged.
+    """
     galileo_config = REPO_ROOT / "config" / "galileo.yaml"
+    # Point at a port that's guaranteed not to have the service running.
+    # Port 1 is the canonical choice (privileged, never bound on Linux).
+    env = {**os.environ, "LOCKSTEP_0G_STORAGE_SERVICE_URL": "http://127.0.0.1:1"}
     result = subprocess.run(  # noqa: S603 — pytest-controlled invocation
         [sys.executable, str(DEMO_PATH), "--config", str(galileo_config)],
         check=False,
@@ -81,8 +92,8 @@ def test_demo_with_galileo_config_fails_with_not_implemented_error() -> None:
         text=True,
         timeout=60,
         cwd=str(REPO_ROOT),
+        env=env,
     )
     assert result.returncode != 0
     combined = result.stdout + result.stderr
-    assert "NotImplementedError" in combined
-    assert "Day 4" in combined
+    assert "SubstrateError" in combined or "transport error" in combined

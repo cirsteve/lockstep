@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -264,32 +265,17 @@ def test_real_storage_adapter_constructs_without_credentials():
 
 
 def test_real_storage_adapter_authorize_attestation_normalizes_case():
+    """authorize_attestation does a network POST to the TS service before
+    seeding the local set. Mock the HTTP client so we can verify the
+    case-normalization invariant in isolation."""
     adapter = RealStorageAdapter(
         rpc_url="https://evmrpc-testnet.0g.ai",
         indexer_url="https://indexer-storage-testnet-turbo.0g.ai",
     )
     pubkey = "0x" + "AB" * 32
-    adapter.authorize_attestation(pubkey)
+    with patch.object(adapter._http, "authorize_attestation"):
+        adapter.authorize_attestation(pubkey)
     assert pubkey.lower() in adapter._authorized_attestations
-
-
-def test_real_storage_adapter_methods_raise_not_implemented():
-    adapter = RealStorageAdapter(
-        rpc_url="https://evmrpc-testnet.0g.ai",
-        indexer_url="https://indexer-storage-testnet-turbo.0g.ai",
-    )
-    bundle = b"x" * 32
-    pubkey = "0x" + "ab" * 32
-    plaintext_commitment = "0x" + "cd" * 32
-
-    with pytest.raises(NotImplementedError, match="Day 4"):
-        adapter.upload_encrypted_solution(
-            bundle,
-            plaintext_commitment=plaintext_commitment,
-            recipient_pubkey=pubkey,
-        )
-    with pytest.raises(NotImplementedError, match="Day 4"):
-        adapter.download_encrypted_solution("zg://anything")
 
 
 def test_real_storage_adapter_accepts_token_budget_as_string_or_float():
