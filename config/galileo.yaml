@@ -1,19 +1,28 @@
 # 0G Galileo testnet config — storage is real, all other adapters are Mock.
-# Day 4+ enables the real storage path; Day 3 ships the adapter as a
-# constructable skeleton that raises NotImplementedError on method calls.
 #
-# Required env vars when running against this config:
-#   LOCKSTEP_0G_PRIVATE_KEY       — dev wallet private key (faucet at faucet.0g.ai)
-#   LOCKSTEP_0G_STORAGE_SERVICE_URL — URL of the local TS storage service
-#                                     (e.g. http://localhost:7878), Day 4+
+# The real storage adapter is a thin httpx client to the TS storage
+# service in services/storage-ts/. Boot the service with `npm run dev`
+# in that directory before running anything that touches storage —
+# `examples/demo_flow.py --config config/galileo.yaml`,
+# `tests/substrate/test_storage_conformance.py` with
+# `LOCKSTEP_TEST_REAL_STORAGE=1`, etc. The service holds the wallet
+# key and binds to 127.0.0.1 only; never expose port 7878 beyond
+# localhost.
 #
-# Optional env overrides for the YAML defaults below:
-#   LOCKSTEP_0G_GALILEO_RPC, LOCKSTEP_0G_GALILEO_INDEXER
+# Required env vars:
+#   LOCKSTEP_0G_PRIVATE_KEY       — dev wallet private key (faucet at faucet.0g.ai).
+#                                   Read by the TS service at boot, not here.
+#
+# Optional env overrides for the YAML defaults below (env wins):
+#   LOCKSTEP_0G_GALILEO_RPC         — chain RPC URL
+#   LOCKSTEP_0G_GALILEO_INDEXER     — 0G storage indexer URL
+#   LOCKSTEP_0G_STORAGE_SERVICE_URL — TS service URL (default http://localhost:7878)
 
 storage:
   kind: real
   real:
     rpc_url: https://evmrpc-testnet.0g.ai
     indexer_url: https://indexer-storage-testnet-turbo.0g.ai
+    service_url: http://localhost:7878
     token_budget: "100"
     log_path: logs/substrate-storage.jsonl

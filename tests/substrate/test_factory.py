@@ -78,6 +78,65 @@ def test_unknown_kind_raises_value_error():
         get_storage_adapter({"storage": {"kind": "ipfs"}})
 
 
+def test_real_kind_propagates_service_url_from_yaml(monkeypatch):
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_STORAGE_SERVICE_URL", raising=False)
+
+    adapter = get_storage_adapter(
+        {
+            "storage": {
+                "kind": "real",
+                "real": {
+                    "rpc_url": "https://r.example",
+                    "indexer_url": "https://i.example",
+                    "service_url": "http://localhost:9999",
+                },
+            }
+        }
+    )
+    assert adapter._service_url == "http://localhost:9999"
+
+
+def test_real_kind_defaults_service_url_to_localhost_7878(monkeypatch):
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_STORAGE_SERVICE_URL", raising=False)
+
+    adapter = get_storage_adapter(
+        {
+            "storage": {
+                "kind": "real",
+                "real": {
+                    "rpc_url": "https://r.example",
+                    "indexer_url": "https://i.example",
+                },
+            }
+        }
+    )
+    assert adapter._service_url == "http://localhost:7878"
+
+
+def test_service_url_env_overrides_yaml(monkeypatch):
+    monkeypatch.setenv("LOCKSTEP_0G_STORAGE_SERVICE_URL", "http://env-host:1234")
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
+
+    adapter = get_storage_adapter(
+        {
+            "storage": {
+                "kind": "real",
+                "real": {
+                    "rpc_url": "https://r.example",
+                    "indexer_url": "https://i.example",
+                    "service_url": "http://yaml-host:9999",
+                },
+            }
+        }
+    )
+    assert adapter._service_url == "http://env-host:1234"
+
+
 def test_real_kind_propagates_log_path(monkeypatch, tmp_path: Path):
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
@@ -113,12 +172,14 @@ def test_local_yaml_loads_and_constructs_mock():
 
 def test_galileo_yaml_loads_and_constructs_real(monkeypatch):
     """End-to-end check that the shipped config/galileo.yaml parses and
-    constructs a RealStorageAdapter (without needing creds — methods
-    raise NotImplementedError, but construction succeeds)."""
+    constructs a RealStorageAdapter. Construction is cheap — both the
+    httpx client and the Web3 provider lazy-connect, so no TS service
+    or RPC needs to be reachable."""
     import yaml
 
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_RPC", raising=False)
     monkeypatch.delenv("LOCKSTEP_0G_GALILEO_INDEXER", raising=False)
+    monkeypatch.delenv("LOCKSTEP_0G_STORAGE_SERVICE_URL", raising=False)
     monkeypatch.delenv("LOCKSTEP_0G_PRIVATE_KEY", raising=False)
 
     repo_root = Path(__file__).resolve().parents[2]
@@ -129,3 +190,4 @@ def test_galileo_yaml_loads_and_constructs_real(monkeypatch):
     assert isinstance(adapter, RealStorageAdapter)
     assert adapter._rpc_url == "https://evmrpc-testnet.0g.ai"
     assert adapter._indexer_url == "https://indexer-storage-testnet-turbo.0g.ai"
+    assert adapter._service_url == "http://localhost:7878"
