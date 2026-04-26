@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.31",
     "web3>=6.15",
     "eth-account>=0.11",
+    "pyyaml>=6.0.3",
 ]
 
 [project.optional-dependencies]
