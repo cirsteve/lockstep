@@ -91,8 +91,12 @@ Two in-memory structures are scoped to the service process:
 
 - `authorizedAttestations: Set<string>` — populated by
   `POST /authorize-attestation`, consulted by `GET /load-dataset-full`.
-- `datasetMap: Map<sha256, { 0G-rootHash, size }>` — populated by
-  `POST /upload-dataset`, consulted by `GET /load-dataset-{public,full}`.
+- `uploadIndex: Map<sha256, { zgRoot, txHash, txSeq, size }>` —
+  populated by every paid POST (`/upload-encrypted-solution`,
+  `/upload-receipt`, `/upload-dataset`). `getOrUpload(bytes, sha256)`
+  consults it before paying so a Python-side retry after a partial
+  failure (public paid, private 502) won't re-pay for the public side.
+  `GET /load-dataset-{public,full}` reads from the same index.
 
 Both reset on restart. The bytes themselves persist on 0G storage —
 only the `sha256 → 0G-rootHash` resolution is lost. Conformance and
@@ -190,7 +194,7 @@ which on a single-user dev box is the local user.
   Python adapter's `_with_retry` owns the retry budget so the wall-clock
   contract is single-sided.
 - The service does not persist state to disk. Restart loses the
-  `datasetMap` and `authorizedAttestations` (per §A.0; see "State"
+  `uploadIndex` and `authorizedAttestations` (per §A.0; see "State"
   above).
 
 ### Containerized

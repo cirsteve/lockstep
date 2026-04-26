@@ -34,12 +34,23 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const indexer = new Indexer(INDEXER_URL);
 
-// In-memory state for the dataset and authorize-attestation endpoints.
-// Resets on restart; 0G storage persists the bytes themselves but the
-// sha256 -> 0G-rootHash map does not. Hackathon scope is single-process
-// (conformance, demo); persistence across restarts is a Day 5+ concern.
+// In-memory state. Resets on restart; 0G storage persists the bytes
+// themselves but the sha256 -> 0G-rootHash mapping does not. Hackathon
+// scope is single-process (conformance, demo); persistence across
+// restarts is a Day 5+ concern.
 const authorizedAttestations = new Set<string>();
-const datasetMap = new Map<string, { zgRoot: string; size: number }>();
+
+// Idempotency index for every POST that pays for a 0G upload. Keyed by
+// sha256 of the bytes uploaded; each entry caches the SDK result so
+// retries (Python adapter retries on 5xx) reuse the cached upload
+// instead of double-paying. See `getOrUpload` below.
+type UploadIndexEntry = {
+  zgRoot: string;
+  txHash: string;
+  txSeq: number;
+  size: number;
+};
+const uploadIndex = new Map<string, UploadIndexEntry>();
 
 function sha256Hex(bytes: Uint8Array | Buffer): string {
   return '0x' + crypto.createHash('sha256').update(bytes).digest('hex');
@@ -59,16 +70,33 @@ function parseZgUri(uri: string): string {
   return root;
 }
 
-type UploadResult = { rootHash: string; txHash: string; txSeq: number };
-
-async function uploadBytes(
+// Idempotent upload. If `contentHash` (sha256 of the bytes) is already
+// in `uploadIndex`, returns the cached entry without paying. Otherwise
+// uploads via the SDK and caches the result. This is what makes the
+// service safe under the Python adapter's retry-on-5xx semantics:
+// `POST /upload-dataset` can fail mid-flight (public paid, private
+// 502), but a retry will short-circuit the public side via the cache
+// rather than re-paying.
+async function getOrUpload(
   bytes: Buffer,
-): Promise<[UploadResult, null] | [null, Error]> {
+  contentHash: string,
+): Promise<[UploadIndexEntry, null] | [null, Error]> {
+  const cached = uploadIndex.get(contentHash);
+  if (cached) {
+    return [cached, null];
+  }
   const [tx, err] = await indexer.upload(new MemData(bytes), RPC_URL, wallet);
   if (err !== null || !('rootHash' in tx)) {
     return [null, err ?? new Error('unknown SDK upload failure')];
   }
-  return [tx, null];
+  const entry: UploadIndexEntry = {
+    zgRoot: tx.rootHash,
+    txHash: tx.txHash,
+    txSeq: tx.txSeq,
+    size: bytes.length,
+  };
+  uploadIndex.set(contentHash, entry);
+  return [entry, null];
 }
 
 async function downloadBytes(
@@ -152,12 +180,11 @@ app.post(
       }
 
       const bundleHash = sha256Hex(bytes);
-      const file = new MemData(bytes);
-      const [tx, err] = await indexer.upload(file, RPC_URL, wallet);
-      if (err !== null || !('rootHash' in tx)) {
+      const [entry, err] = await getOrUpload(bytes, bundleHash);
+      if (err !== null) {
         res.status(502).json({
           error: 'upload_failed',
-          detail: err ? String(err.message ?? err) : 'unknown SDK failure',
+          detail: String(err.message ?? err),
         });
         return;
       }
@@ -165,13 +192,13 @@ app.post(
       res.json({
         plaintext_commitment: plaintextCommitment,
         bundle_hash: bundleHash,
-        storage_uri: `zg://${tx.rootHash}`,
+        storage_uri: `zg://${entry.zgRoot}`,
         recipient_pubkey: recipientPubkey,
         encryption_scheme: 'x25519-chacha20poly1305-mock',
-        tx_hash: tx.txHash,
-        root_hash: tx.rootHash,
-        tx_seq: tx.txSeq,
-        size_bytes: bytes.length,
+        tx_hash: entry.txHash,
+        root_hash: entry.zgRoot,
+        tx_seq: entry.txSeq,
+        size_bytes: entry.size,
       });
     } catch (e: unknown) {
       res.status(500).json({
@@ -239,7 +266,7 @@ app.post(
         return;
       }
       const contentHash = sha256Hex(bytes);
-      const [tx, err] = await uploadBytes(bytes);
+      const [entry, err] = await getOrUpload(bytes, contentHash);
       if (err !== null) {
         res
           .status(502)
@@ -247,12 +274,12 @@ app.post(
         return;
       }
       res.json({
-        uri: `zg://${tx.rootHash}`,
-        root_hash: tx.rootHash,
-        tx_hash: tx.txHash,
-        tx_seq: tx.txSeq,
+        uri: `zg://${entry.zgRoot}`,
+        root_hash: entry.zgRoot,
+        tx_hash: entry.txHash,
+        tx_seq: entry.txSeq,
         content_hash: contentHash,
-        size_bytes: bytes.length,
+        size_bytes: entry.size,
       });
     } catch (e: unknown) {
       res.status(500).json({
@@ -342,7 +369,9 @@ app.post(
         });
         return;
       }
-      const [pubTx, pubErr] = await uploadBytes(publicBytes);
+      // Upload each side via getOrUpload so a retry after a partial
+      // failure (public paid, private 502) doesn't re-pay for public.
+      const [pubEntry, pubErr] = await getOrUpload(publicBytes, publicRoot);
       if (pubErr !== null) {
         res.status(502).json({
           error: 'upload_failed',
@@ -350,7 +379,7 @@ app.post(
         });
         return;
       }
-      const [privTx, privErr] = await uploadBytes(privateBytes);
+      const [privEntry, privErr] = await getOrUpload(privateBytes, privateRoot);
       if (privErr !== null) {
         res.status(502).json({
           error: 'upload_failed',
@@ -358,25 +387,17 @@ app.post(
         });
         return;
       }
-      datasetMap.set(publicRoot, {
-        zgRoot: pubTx.rootHash,
-        size: publicBytes.length,
-      });
-      datasetMap.set(privateRoot, {
-        zgRoot: privTx.rootHash,
-        size: privateBytes.length,
-      });
       res.json({
-        public_storage_uri: `zg://${pubTx.rootHash}`,
-        private_storage_uri: `zg://${privTx.rootHash}`,
-        public_root_hash: pubTx.rootHash,
-        private_root_hash: privTx.rootHash,
-        public_tx_hash: pubTx.txHash,
-        private_tx_hash: privTx.txHash,
-        public_tx_seq: pubTx.txSeq,
-        private_tx_seq: privTx.txSeq,
-        public_size_bytes: publicBytes.length,
-        private_size_bytes: privateBytes.length,
+        public_storage_uri: `zg://${pubEntry.zgRoot}`,
+        private_storage_uri: `zg://${privEntry.zgRoot}`,
+        public_root_hash: pubEntry.zgRoot,
+        private_root_hash: privEntry.zgRoot,
+        public_tx_hash: pubEntry.txHash,
+        private_tx_hash: privEntry.txHash,
+        public_tx_seq: pubEntry.txSeq,
+        private_tx_seq: privEntry.txSeq,
+        public_size_bytes: pubEntry.size,
+        private_size_bytes: privEntry.size,
       });
     } catch (e: unknown) {
       res.status(500).json({
@@ -397,7 +418,7 @@ app.get('/load-dataset-public', async (req, res) => {
       });
       return;
     }
-    const entry = datasetMap.get(publicRoot);
+    const entry = uploadIndex.get(publicRoot);
     if (!entry) {
       res.status(404).json({
         error: 'not_in_index',
@@ -469,8 +490,8 @@ app.get('/load-dataset-full', async (req, res) => {
       });
       return;
     }
-    const pubEntry = datasetMap.get(publicRoot);
-    const privEntry = datasetMap.get(privateRoot);
+    const pubEntry = uploadIndex.get(publicRoot);
+    const privEntry = uploadIndex.get(privateRoot);
     if (!pubEntry || !privEntry) {
       res.status(404).json({
         error: 'not_in_index',
